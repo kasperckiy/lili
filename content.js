@@ -11,15 +11,12 @@
     const ACTION_SELECTOR = ".entry-point .lili-connect-action, .entry-point .lili-pending-action, .entry-point .lili-sending-action, .entry-point .lili-loading-action, .entry-point button.artdeco-button[aria-label*='Message'], .entry-point a[aria-label*='Message']";
     const OBSERVER_MARGIN = "300px";
     const NETWORK_HINT_EVENT = "lili:relationship-hints";
-    const INVITE_FRAME_TIMEOUT_MS = 15000;
-    const INVITE_RESULT_TIMEOUT_MS = 8000;
-    const INVITE_POLL_INTERVAL_MS = 200;
+    const INVITE_API_PATH = "/voyager/api/voyagerRelationshipsDashMemberRelationships?action=verifyQuotaAndCreateV2&decorationId=com.linkedin.voyager.dash.deco.relationships.InvitationCreationResultWithInvitee-2";
     const PROFILE_FETCH_TIMEOUT_MS = 15000;
     const PROFILE_REQUEST_DELAY_MIN_MS = 1;
     const PROFILE_REQUEST_DELAY_MAX_MS = 10000;
     const PROFILE_STATUS_CACHE_KEY = "lili-profile-status-cache-v2";
     const PROFILE_STATUS_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
-    const SEND_WITHOUT_NOTE_LABEL = "Send without a note";
     const PROFILE_PAGE_SYNC_DEBOUNCE_MS = 250;
     const SENT_INVITATIONS_SYNC_DEBOUNCE_MS = 250;
 
@@ -115,10 +112,10 @@
             return;
         }
 
-        const action = getProfileDocumentStatus(document.documentElement.outerHTML);
-        const didChange = action === "pending"
-            ? applyPendingStatus(profileSlug, "profile-page")
-            : applyConnectStatus(profileSlug, "profile-page");
+        const profileRecord = getProfileDocumentRecord(document.documentElement.outerHTML);
+        const didChange = profileRecord.action === "pending"
+            ? applyPendingStatus(profileSlug, "profile-page", profileRecord.profileUrn)
+            : applyConnectStatus(profileSlug, "profile-page", profileRecord.profileUrn);
 
         if (!didChange) {
             return;
@@ -488,82 +485,75 @@
     }
 
     async function sendInviteWithoutNote(profileSlug) {
-        const frame = createHiddenFrame();
-
-        document.body.appendChild(frame);
-
-        let requestObserver = null;
-
         try {
-            await loadHiddenFrame(
-                frame,
-                `/preload/custom-invite/?vanityName=${encodeURIComponent(profileSlug)}`,
-                INVITE_FRAME_TIMEOUT_MS,
-                "Invite frame"
-            );
-
-            if (!frame.contentWindow) {
-                throw new Error("Invite frame did not expose a window");
+            const profileRecord = await ensureProfileRecord(profileSlug);
+            if (profileRecord?.action === "pending") {
+                return "pending";
             }
 
-            requestObserver = installInviteRequestObserver(frame.contentWindow);
+            if (!profileRecord?.profileUrn) {
+                throw new Error("Profile URN was not resolved for invite API");
+            }
 
-            const sendButton = await waitForInviteSendButton(frame);
-            sendButton.click();
-
-            return await waitForInviteOutcome(requestObserver.state);
+            return await sendInviteThroughApi(profileRecord.profileUrn);
         } catch (error) {
             console.warn("[LiLi] Failed to send invite without note", error);
             return "failure";
-        } finally {
-            requestObserver?.restore();
-            frame.remove();
         }
     }
 
-    function createHiddenFrame() {
-        const frame = document.createElement("iframe");
-        frame.setAttribute("aria-hidden", "true");
-        frame.tabIndex = -1;
-        frame.style.position = "fixed";
-        frame.style.right = "0";
-        frame.style.bottom = "0";
-        frame.style.width = "1px";
-        frame.style.height = "1px";
-        frame.style.opacity = "0";
-        frame.style.pointerEvents = "none";
-        frame.style.border = "0";
-        frame.style.zIndex = "-1";
-        return frame;
+    async function ensureProfileRecord(profileSlug) {
+        await profileStatusCacheReady;
+
+        const cachedRecord = getCachedProfileStatus(profileSlug);
+        if (cachedRecord?.profileUrn) {
+            return cachedRecord;
+        }
+
+        const fetchedRecord = await fetchProfileRecord(profileSlug);
+        await setCachedProfileStatus(profileSlug, fetchedRecord.action, "profile-fetch", fetchedRecord.profileUrn);
+        return getCachedProfileStatus(profileSlug) || fetchedRecord;
     }
 
-    function loadHiddenFrame(frame, url, timeoutMs, frameLabel) {
-        return new Promise((resolve, reject) => {
-            const handleLoad = () => {
-                cleanup();
-                resolve();
-            };
+    async function sendInviteThroughApi(profileUrn) {
+        const csrfToken = getLinkedInCsrfToken();
+        if (!csrfToken) {
+            throw new Error("LinkedIn CSRF token is not available");
+        }
 
-            const handleError = () => {
-                cleanup();
-                reject(new Error(`${frameLabel} failed to load`));
-            };
-
-            const timeoutId = window.setTimeout(() => {
-                cleanup();
-                reject(new Error(`${frameLabel} load timed out`));
-            }, timeoutMs);
-
-            function cleanup() {
-                window.clearTimeout(timeoutId);
-                frame.removeEventListener("load", handleLoad);
-                frame.removeEventListener("error", handleError);
-            }
-
-            frame.addEventListener("load", handleLoad, { once: true });
-            frame.addEventListener("error", handleError, { once: true });
-            frame.src = normalizeLinkedInUrl(url);
+        const response = await fetch(normalizeLinkedInUrl(INVITE_API_PATH), {
+            method: "POST",
+            credentials: "same-origin",
+            headers: {
+                accept: "application/vnd.linkedin.normalized+json+2.1",
+                "content-type": "application/json; charset=UTF-8",
+                "csrf-token": csrfToken,
+                "x-li-lang": getLinkedInLanguageHeader(),
+                "x-restli-protocol-version": "2.0.0"
+            },
+            body: JSON.stringify({
+                invitee: {
+                    inviteeUnion: {
+                        memberProfile: profileUrn
+                    }
+                }
+            })
         });
+
+        const text = await response.text();
+        if (looksLikeInvitePending(text, "POST", response.status)) {
+            return "pending";
+        }
+
+        if (response.ok) {
+            return "sent";
+        }
+
+        if (looksLikeInviteFailure(text, "POST", response.status)) {
+            return "failure";
+        }
+
+        return "failure";
     }
 
     async function resolveProfileStatus(profileSlug) {
@@ -583,19 +573,19 @@
             return;
         }
 
-        const action = await fetchProfileStatus(profileSlug);
+        const profileRecord = await fetchProfileRecord(profileSlug);
         profileProbeStateBySlug.delete(profileSlug);
 
-        if (action === "pending") {
-            setPendingStatus(profileSlug, "profile-fetch");
+        if (profileRecord.action === "pending") {
+            setPendingStatus(profileSlug, "profile-fetch", profileRecord.profileUrn);
             return;
         }
 
-        await setCachedProfileStatus(profileSlug, "connect", "profile-fetch");
+        await setCachedProfileStatus(profileSlug, "connect", "profile-fetch", profileRecord.profileUrn);
         rerenderCards(profileSlug);
     }
 
-    async function fetchProfileStatus(profileSlug) {
+    async function fetchProfileRecord(profileSlug) {
         const controller = new AbortController();
         const timeoutId = window.setTimeout(() => {
             controller.abort();
@@ -616,15 +606,19 @@
             }
 
             const html = await response.text();
-            return getProfileDocumentStatus(html);
+            return getProfileDocumentRecord(html);
         } finally {
             window.clearTimeout(timeoutId);
         }
     }
 
-    function getProfileDocumentStatus(html) {
+    function getProfileDocumentRecord(html) {
+        const profileUrn = getProfileUrnFromHtml(html);
         if (!html) {
-            return "connect";
+            return {
+                action: "connect",
+                profileUrn
+            };
         }
 
         const hasInvitationState = /state:invitation:urn:li:member:[^"']+/i.test(html);
@@ -633,19 +627,46 @@
 
         if (hasInvitationState) {
             if (hasPendingStringValue) {
-                return "pending";
+                return {
+                    action: "pending",
+                    profileUrn
+                };
             }
 
             if (hasConnectStringValue) {
-                return "connect";
+                return {
+                    action: "connect",
+                    profileUrn
+                };
             }
         }
 
         const hasFallbackPendingState = /Pending, click to withdraw invitation sent to/i.test(html)
             || /queryName\\":\\"ProfileMemberRelationshipRefreshById\\"|queryName":"ProfileMemberRelationshipRefreshById"/i.test(html)
-                && /withdrawInvitation|Withdraw invitation/i.test(html);
+            && /withdrawInvitation|Withdraw invitation/i.test(html);
 
-        return hasFallbackPendingState ? "pending" : "connect";
+        return {
+            action: hasFallbackPendingState ? "pending" : "connect",
+            profileUrn
+        };
+    }
+
+    function getProfileUrnFromHtml(html) {
+        if (!html) {
+            return "";
+        }
+
+        const encodedProfileUrnMatch = html.match(/profileUrn=urn%3Ali%3Afsd_profile%3A([^"&]+)/i);
+        if (encodedProfileUrnMatch?.[1]) {
+            return `urn:li:fsd_profile:${decodeURIComponent(encodedProfileUrnMatch[1])}`;
+        }
+
+        const profileUrnMatch = html.match(/urn:li:fsd_profile:([A-Za-z0-9_-]+)/i);
+        if (profileUrnMatch?.[1]) {
+            return `urn:li:fsd_profile:${profileUrnMatch[1]}`;
+        }
+
+        return "";
     }
 
     function getRandomProfileDelayMs() {
@@ -668,21 +689,23 @@
         return record;
     }
 
-    function setPendingStatus(profileSlug, source) {
-        applyPendingStatus(profileSlug, source);
+    function setPendingStatus(profileSlug, source, profileUrn) {
+        applyPendingStatus(profileSlug, source, profileUrn);
         void persistProfileStatusCache();
         rerenderCards(profileSlug);
     }
 
-    function applyPendingStatus(profileSlug, source) {
+    function applyPendingStatus(profileSlug, source, profileUrn) {
         const existingHint = relationshipHints.get(profileSlug);
         const existingCache = getCachedProfileStatus(profileSlug);
         const cachedSource = source;
         const nextExpiresAt = Date.now() + PROFILE_STATUS_CACHE_TTL_MS;
+        const nextProfileUrn = profileUrn || existingCache?.profileUrn || "";
         const didChange = existingHint?.action !== "pending"
             || existingHint?.source !== source
             || existingCache?.action !== "pending"
             || existingCache?.source !== cachedSource
+            || (existingCache?.profileUrn || "") !== nextProfileUrn
             || !Number.isFinite(existingCache?.expiresAt)
             || existingCache.expiresAt <= Date.now();
 
@@ -695,19 +718,22 @@
         profileStatusBySlug.set(profileSlug, {
             action: "pending",
             source: cachedSource,
-            expiresAt: nextExpiresAt
+            expiresAt: nextExpiresAt,
+            profileUrn: nextProfileUrn
         });
 
         return didChange;
     }
 
-    function applyConnectStatus(profileSlug, source) {
+    function applyConnectStatus(profileSlug, source, profileUrn) {
         const existingHint = relationshipHints.get(profileSlug);
         const existingCache = getCachedProfileStatus(profileSlug);
         const nextExpiresAt = Date.now() + PROFILE_STATUS_CACHE_TTL_MS;
+        const nextProfileUrn = profileUrn || existingCache?.profileUrn || "";
         const didChange = Boolean(existingHint)
             || existingCache?.action !== "connect"
             || existingCache?.source !== source
+            || (existingCache?.profileUrn || "") !== nextProfileUrn
             || !Number.isFinite(existingCache?.expiresAt)
             || existingCache.expiresAt <= Date.now();
 
@@ -717,17 +743,18 @@
         profileStatusBySlug.set(profileSlug, {
             action: "connect",
             source,
-            expiresAt: nextExpiresAt
+            expiresAt: nextExpiresAt,
+            profileUrn: nextProfileUrn
         });
 
         return didChange;
     }
 
-    async function setCachedProfileStatus(profileSlug, action, source) {
+    async function setCachedProfileStatus(profileSlug, action, source, profileUrn) {
         if (action === "pending") {
-            applyPendingStatus(profileSlug, source);
+            applyPendingStatus(profileSlug, source, profileUrn);
         } else {
-            applyConnectStatus(profileSlug, source);
+            applyConnectStatus(profileSlug, source, profileUrn);
         }
 
         await persistProfileStatusCache();
@@ -762,7 +789,8 @@
             nextRecords.set(profileSlug, {
                 action: record.action,
                 source: record.source || "profile-cache",
-                expiresAt: record.expiresAt
+                expiresAt: record.expiresAt,
+                profileUrn: typeof record.profileUrn === "string" ? record.profileUrn : ""
             });
         }
 
@@ -829,7 +857,8 @@
             payload[profileSlug] = {
                 action: record.action,
                 source: record.source || "profile-cache",
-                expiresAt: record.expiresAt
+                expiresAt: record.expiresAt,
+                profileUrn: typeof record.profileUrn === "string" ? record.profileUrn : ""
             };
         }
 
@@ -887,158 +916,27 @@
         window.localStorage.setItem(PROFILE_STATUS_CACHE_KEY, JSON.stringify(payload));
     }
 
-    async function waitForInviteSendButton(frame) {
-        const deadline = Date.now() + INVITE_FRAME_TIMEOUT_MS;
+    function getLinkedInCsrfToken() {
+        const cookieValue = document.cookie
+            .split("; ")
+            .find((entry) => entry.startsWith("JSESSIONID="))
+            ?.slice("JSESSIONID=".length) || "";
 
-        while (Date.now() < deadline) {
-            const sendButton = queryInviteSendButton(frame.contentDocument);
-            if (sendButton instanceof HTMLButtonElement) {
-                return sendButton;
-            }
-
-            await delay(INVITE_POLL_INTERVAL_MS);
-        }
-
-        throw new Error("Send without note button not found");
+        return cookieValue.replace(/^"|"$/g, "");
     }
 
-    async function waitForInviteOutcome(requestState) {
-        const deadline = Date.now() + INVITE_RESULT_TIMEOUT_MS;
-
-        while (Date.now() < deadline) {
-            if (requestState.outcome) {
-                return requestState.outcome;
-            }
-
-            await delay(INVITE_POLL_INTERVAL_MS);
+    function getLinkedInLanguageHeader() {
+        const localeMeta = document.querySelector('meta[name="i18nLocale"]')?.getAttribute("content");
+        if (localeMeta) {
+            return localeMeta;
         }
 
-        return requestState.outcome || "failure";
-    }
-
-    function queryInviteSendButton(doc) {
-        const root = getInviteQueryRoot(doc);
-        if (!root || !(root instanceof Document || root instanceof DocumentFragment || root instanceof Element)) {
-            return null;
+        const pageLanguage = (document.documentElement.lang || "en").replace("-", "_");
+        if (pageLanguage.includes("_")) {
+            return pageLanguage;
         }
 
-        return root.querySelector(`button[aria-label='${SEND_WITHOUT_NOTE_LABEL}']`);
-    }
-
-    function getInviteQueryRoot(doc) {
-        if (!(doc instanceof Document)) {
-            return null;
-        }
-
-        const outlet = doc.getElementById("interop-outlet");
-        if (!outlet) {
-            return doc;
-        }
-
-        const template = outlet.querySelector("template[shadowrootmode='open']");
-        return outlet.shadowRoot || template?.content || doc;
-    }
-
-    function installInviteRequestObserver(frameWindow) {
-        const state = {
-            outcome: ""
-        };
-
-        const originalFetch = typeof frameWindow.fetch === "function" ? frameWindow.fetch : null;
-        if (originalFetch) {
-            frameWindow.fetch = async function (...args) {
-                const response = await originalFetch.apply(this, args);
-
-                try {
-                    const text = await response.clone().text();
-                    updateInviteRequestState(
-                        state,
-                        getFetchMethod(args),
-                        getFetchUrl(args),
-                        response.status,
-                        text
-                    );
-                } catch {
-                    // ignore probe failures
-                }
-
-                return response;
-            };
-        }
-
-        const xhrPrototype = frameWindow.XMLHttpRequest?.prototype;
-        const originalOpen = xhrPrototype?.open;
-        const originalSend = xhrPrototype?.send;
-
-        if (xhrPrototype && originalOpen && originalSend) {
-            xhrPrototype.open = function (method, url, ...rest) {
-                this.__liliRequestMethod = method;
-                this.__liliRequestUrl = url;
-                return originalOpen.call(this, method, url, ...rest);
-            };
-
-            xhrPrototype.send = function (...args) {
-                this.addEventListener("load", () => {
-                    try {
-                        const text = this.responseType && this.responseType !== "text" && this.responseType !== "json"
-                            ? ""
-                            : this.responseType === "json"
-                                ? JSON.stringify(this.response)
-                                : this.responseText;
-
-                        updateInviteRequestState(
-                            state,
-                            this.__liliRequestMethod,
-                            this.__liliRequestUrl,
-                            this.status,
-                            text || ""
-                        );
-                    } catch {
-                        // ignore probe failures
-                    }
-                }, { once: true });
-
-                return originalSend.apply(this, args);
-            };
-        }
-
-        return {
-            state,
-            restore() {
-                if (originalFetch) {
-                    frameWindow.fetch = originalFetch;
-                }
-
-                if (xhrPrototype && originalOpen && originalSend) {
-                    xhrPrototype.open = originalOpen;
-                    xhrPrototype.send = originalSend;
-                }
-            }
-        };
-    }
-
-    function updateInviteRequestState(state, method, urlLike, status, text) {
-        if (state.outcome) {
-            return;
-        }
-
-        const normalizedMethod = String(method || "GET").toUpperCase();
-        const normalizedUrl = normalizeRequestUrl(urlLike);
-        const haystack = `${normalizedMethod} ${normalizedUrl} ${text || ""}`;
-
-        if (looksLikeInvitePending(haystack, normalizedMethod, status)) {
-            state.outcome = "pending";
-            return;
-        }
-
-        if (looksLikeInviteFailure(haystack, normalizedMethod, status)) {
-            state.outcome = "failure";
-            return;
-        }
-
-        if (looksLikeInviteSuccess(haystack, normalizedMethod, status)) {
-            state.outcome = "sent";
-        }
+        return `${pageLanguage}_US`;
     }
 
     function looksLikeInvitePending(text, method, status) {
@@ -1057,14 +955,6 @@
         return false;
     }
 
-    function looksLikeInviteSuccess(text, method, status) {
-        if (method === "GET" || status < 200 || status >= 400) {
-            return false;
-        }
-
-        return /(invitationId|sharedSecret|invitationState|invitationUrn|INVITATION_SENT|PENDING|inviteeMember)/i.test(text);
-    }
-
     function looksLikeInviteFailure(text, method, status) {
         if (method === "GET") {
             return false;
@@ -1079,29 +969,6 @@
         }
 
         return /(emailRequired|weekly invitation limit|unable to send invitation|cannot send invitation|something went wrong|try again later|challenge)/i.test(text);
-    }
-
-    function getFetchMethod(args) {
-        const request = args[0];
-        const init = args[1];
-        return init?.method || request?.method || "GET";
-    }
-
-    function getFetchUrl(args) {
-        const request = args[0];
-        return typeof request === "string" ? request : request?.url || "";
-    }
-
-    function normalizeRequestUrl(urlLike) {
-        if (!urlLike) {
-            return "";
-        }
-
-        try {
-            return new URL(urlLike, LINKEDIN_ORIGIN).toString();
-        } catch {
-            return "";
-        }
     }
 
     function delay(ms) {

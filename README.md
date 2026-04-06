@@ -6,8 +6,8 @@ Instead of always showing the default `Message` button, LiLi uses a simple local
 
 1. `1st` degree connections keep the original `Message` button.
 2. Non-`1st` members show cached `Connect` or `Pending` when available, otherwise a generated loading action.
-3. Clicking `Connect` stays on the current group page and runs LinkedIn's invite flow in the background.
-4. LiLi attempts to skip the note dialog by triggering `Send without a note` directly.
+3. Clicking `Connect` stays on the current group page and calls LinkedIn's invitation API in the background.
+4. LiLi mirrors the profile-page `Send without a note` flow without opening a hidden invite iframe.
 5. If LinkedIn itself returns invitation state in live Voyager API responses, LiLi can upgrade that card from `Connect` to `Pending` without opening the profile.
 6. If the group page still lacks invitation metadata, LiLi fetches the member profile document with a randomized delay, parses the embedded relationship state, and caches the result for 6 hours.
 7. If you open LinkedIn's sent invitations page, LiLi stores every visible profile there as cached `Pending`.
@@ -25,7 +25,8 @@ This makes LinkedIn group member lists more useful for outreach and triage on pa
 - Shows a loading action for unresolved non-`1st` members while profile status is being resolved.
 - Reuses cached `Connect` and `Pending` results for 6 hours.
 - Sends the invite without leaving the current group members page.
-- Attempts to press LinkedIn's own `Send without a note` action automatically.
+- Uses LinkedIn's own invitation API instead of a hidden invite iframe.
+- Reuses the profile-page invite contract behind `Send without a note`.
 - Treats LinkedIn invite responses like `CANT_RESEND_YET` as `Pending`, because LinkedIn is indicating the invitation already exists and cannot be resent yet.
 - Uses the profile vanity slug already present in the group member card URL.
 - Listens to live LinkedIn page Voyager responses and applies a best-effort `Pending` state when relationship data or resolved invitation metadata is already present there.
@@ -53,7 +54,7 @@ On group member pages it:
 7. Scans LinkedIn's embedded code-block JSON on first load and also parses later network responses.
 8. If LinkedIn exposes invitation metadata for the same profile slug, updates the button to `Pending` immediately.
 9. If the current page still has no pending hint, fetches `/in/{slug}/`, prefers the explicit invitation state from the returned HTML, and caches the result for 6 hours.
-10. On click, opens LinkedIn's invite preload flow in a hidden same-origin iframe and attempts to trigger `Send without a note` inside that hidden invite flow.
+10. On click, resolves the member profile URN and calls the same LinkedIn invitation API that the profile-page `Send without a note` flow uses.
 11. If the invite succeeds or LinkedIn says the invite is already pending, updates the button and cache to `Pending`.
 
 On the sent invitations page it:
@@ -86,7 +87,7 @@ On a concrete profile page it:
 
 - LiLi does not send data to any external server.
 - All logic runs in the browser on the current LinkedIn page.
-- Clicking `Connect` may open LinkedIn's own invite preload flow in a hidden same-origin iframe so the current group page stays in place.
+- Clicking `Connect` calls LinkedIn's own same-origin invitation API so the current group page stays in place.
 - When the group page does not expose enough relationship data, LiLi may fetch the matching LinkedIn profile document and cache the resolved status locally for 6 hours.
 - When a concrete profile page is open, LiLi reuses that already loaded page to overwrite the cached relationship state and does not need an extra profile request for that overwrite.
 - When the sent invitations page is open, LiLi may also cache visible sent-invitation profiles as `Pending` for the same 6-hour TTL.
@@ -103,7 +104,7 @@ On a concrete profile page it:
 ## Limitations
 
 - LinkedIn changes DOM and CSS frequently, so selectors may need updates.
-- The one-click invite flow assumes the profile card contains a valid public LinkedIn vanity slug and that LinkedIn keeps the current preload invite dialog structure.
+- The one-click invite flow assumes the profile card contains a valid public LinkedIn vanity slug and that LinkedIn keeps the current `verifyQuotaAndCreateV2` invitation API contract.
 - `Pending` detection is still best-effort. LiLi trusts group-page data first, then concrete profile pages and the sent invitations list, then a profile HTML fetch; any of these can break if LinkedIn changes page structure or embedded invitation markers.
 - Some profiles may still require extra LinkedIn UI steps, quota checks, or email gating that cannot be bypassed reliably from this extension.
 - The extension has been statically validated in this workspace, but not packaged for Chrome Web Store publication.
