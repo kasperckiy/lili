@@ -199,8 +199,8 @@
                     continue;
                 }
 
-                const slug = getVoyagerProfileSlug(entity);
-                const profileUrn = getVoyagerProfileUrn(entity);
+                const slug = getVoyagerProfileSlug(entity) || extractSlug(entity);
+                const profileUrn = getVoyagerProfileUrn(entity) || extractProfileUrn(entity);
                 const relationshipUrn = getVoyagerRelationshipUrn(entity);
                 if (slug && profileUrn) {
                     profileUrnToSlug.set(profileUrn, slug);
@@ -214,7 +214,7 @@
                     continue;
                 }
 
-                addHint(slug, url);
+                addHint(slug, url, profileUrn);
             }
 
             for (const entity of included) {
@@ -234,11 +234,11 @@
                     continue;
                 }
 
-                addHint(slug, url);
+                addHint(slug, url, extractProfileUrn(entity));
             }
         }
 
-        function addHint(slug, sourceUrl) {
+        function addHint(slug, sourceUrl, profileUrn) {
             const key = `${slug}:pending`;
             if (seen.has(key)) {
                 return;
@@ -248,7 +248,8 @@
             hints.push({
                 slug,
                 action: "pending",
-                source: sourceUrl || "voyager"
+                source: sourceUrl || "voyager",
+                profileUrn: normalizeProfileUrn(profileUrn)
             });
         }
     }
@@ -267,12 +268,13 @@
         return {
             slug,
             action: "pending",
-            source: url || "network"
+            source: url || "network",
+            profileUrn: extractProfileUrn(node)
         };
     }
 
     function extractSlug(node) {
-        const directKeys = ["publicIdentifier", "vanityName", "memberVanityName", "profileVanityName"];
+        const directKeys = ["publicIdentifier", "vanityName", "memberVanityName", "profileVanityName", "inviteeVanityName"];
         for (const key of directKeys) {
             const value = node[key];
             if (typeof value === "string" && isValidSlug(value)) {
@@ -296,16 +298,82 @@
 
     function flattenPrimitivePairs(node) {
         const parts = [];
-        for (const [key, value] of Object.entries(node)) {
-            if (value == null) {
-                continue;
+
+        walk(node, "", 0);
+        return parts.join(" | ");
+
+        function walk(value, prefix, depth) {
+            if (!value || typeof value !== "object" || depth > 2) {
+                return;
             }
 
-            if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-                parts.push(`${key}:${String(value)}`);
+            for (const [key, nestedValue] of Object.entries(value)) {
+                if (nestedValue == null) {
+                    continue;
+                }
+
+                const nextPrefix = prefix ? `${prefix}.${key}` : key;
+                if (typeof nestedValue === "string" || typeof nestedValue === "number" || typeof nestedValue === "boolean") {
+                    parts.push(`${nextPrefix}:${String(nestedValue)}`);
+                    continue;
+                }
+
+                if (Array.isArray(nestedValue)) {
+                    continue;
+                }
+
+                walk(nestedValue, nextPrefix, depth + 1);
             }
         }
-        return parts.join(" | ");
+    }
+
+    function extractProfileUrn(node) {
+        return normalizeProfileUrn(findProfileUrnValue(node, 0));
+    }
+
+    function findProfileUrnValue(node, depth) {
+        if (!node || depth > 3) {
+            return "";
+        }
+
+        if (typeof node === "string") {
+            return node;
+        }
+
+        if (typeof node !== "object") {
+            return "";
+        }
+
+        if (typeof node.profileId === "string") {
+            return `urn:li:fsd_profile:${node.profileId}`;
+        }
+
+        const preferredKeys = [
+            "profileUrn",
+            "entityUrn",
+            "memberProfile",
+            "profile",
+            "profileResolutionResult",
+            "targetInviteeResolutionResult",
+            "inviteeResolutionResult"
+        ];
+
+        for (const key of preferredKeys) {
+            const value = node[key] || node[`*${key}`];
+            const found = findProfileUrnValue(value, depth + 1);
+            if (normalizeProfileUrn(found)) {
+                return found;
+            }
+        }
+
+        for (const value of Object.values(node)) {
+            const found = findProfileUrnValue(value, depth + 1);
+            if (normalizeProfileUrn(found)) {
+                return found;
+            }
+        }
+
+        return "";
     }
 
     function looksLikePendingState(text) {
@@ -322,7 +390,7 @@
             || entity.profileUrn
             || entity.profile?.entityUrn
             || entity.profileResolutionResult?.entityUrn;
-        return typeof profileUrn === "string" && /fsd_profile/i.test(profileUrn) ? profileUrn : "";
+        return normalizeProfileUrn(profileUrn);
     }
 
     function getVoyagerRelationshipUrn(entity) {
@@ -461,6 +529,24 @@
             return "";
         }
         return isValidSlug(match[1]) ? match[1] : "";
+    }
+
+    function normalizeProfileUrn(value) {
+        if (typeof value !== "string") {
+            return "";
+        }
+
+        const trimmedValue = value.trim();
+        if (!trimmedValue) {
+            return "";
+        }
+
+        const match = trimmedValue.match(/(?:urn:li:fsd_profile:)+([A-Za-z0-9_-]+)/i);
+        if (!match?.[1]) {
+            return "";
+        }
+
+        return `urn:li:fsd_profile:${match[1]}`;
     }
 
     function isValidSlug(value) {

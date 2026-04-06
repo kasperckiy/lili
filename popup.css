@@ -27,6 +27,144 @@ body {
     margin-bottom: 16px;
 }
 
+.runtime-panel {
+    margin-bottom: 14px;
+    padding: 14px;
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    background:
+        linear-gradient(135deg, rgba(10, 102, 194, 0.1), rgba(255, 255, 255, 0.7)),
+        var(--panel);
+    box-shadow: 0 10px 30px rgba(31, 42, 50, 0.06);
+}
+
+.runtime-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: flex-start;
+    margin-bottom: 12px;
+}
+
+.runtime-eyebrow {
+    margin: 0 0 4px;
+    color: var(--accent-strong);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.runtime-header h2 {
+    margin: 0;
+    font-size: 16px;
+    line-height: 1.2;
+}
+
+.runtime-updated {
+    margin: 0;
+    color: var(--muted);
+    font-size: 11px;
+    text-align: right;
+}
+
+.runtime-grid {
+    display: grid;
+    gap: 10px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.runtime-stat {
+    display: grid;
+    gap: 4px;
+    padding: 10px 12px;
+    border: 1px solid rgba(10, 102, 194, 0.14);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.75);
+}
+
+.runtime-stat--wide {
+    grid-column: 1 / -1;
+}
+
+.runtime-label {
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.runtime-stat strong {
+    font-size: 22px;
+    line-height: 1;
+}
+
+.runtime-meta {
+    margin: 10px 0 0;
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.35;
+}
+
+.runtime-debug-grid {
+    display: grid;
+    gap: 10px;
+    margin-top: 12px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.runtime-debug-card {
+    padding: 12px;
+    border: 1px solid rgba(10, 102, 194, 0.14);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.65);
+}
+
+.runtime-debug-card--full {
+    grid-column: 1 / -1;
+}
+
+.runtime-debug-title {
+    margin: 0 0 10px;
+    color: var(--ink);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.runtime-debug-list {
+    display: grid;
+    gap: 8px;
+}
+
+.runtime-debug-list--three {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.runtime-debug-list--two {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.runtime-debug-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    align-items: baseline;
+}
+
+.runtime-debug-row span {
+    color: var(--muted);
+    font-size: 11px;
+}
+
+.runtime-debug-row strong {
+    color: var(--ink);
+    font-size: 12px;
+    text-align: right;
+}
+
 .eyebrow {
     margin: 0 0 4px;
     color: var(--accent-strong);

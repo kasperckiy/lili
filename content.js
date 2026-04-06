@@ -19,6 +19,7 @@
     const PROFILE_FETCH_LEASE_RETRY_MIN_MS = 1000;
     const profileFetchSettingsApi = globalThis.LiliProfileFetchSettings || null;
     const PROFILE_FETCH_SETTINGS_KEY = profileFetchSettingsApi?.SETTINGS_STORAGE_KEY || "lili-profile-fetch-settings-v1";
+    const PROFILE_FETCH_RUNTIME_KEY_PREFIX = profileFetchSettingsApi?.RUNTIME_STATS_STORAGE_KEY_PREFIX || "lili-profile-fetch-runtime-v1:";
     const DEFAULT_PROFILE_FETCH_SETTINGS = profileFetchSettingsApi?.DEFAULT_PROFILE_FETCH_SETTINGS || {
         concurrency: 1,
         baseGapMs: 3000,
@@ -34,8 +35,9 @@
     const PROFILE_STATUS_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
     const PROFILE_PAGE_SYNC_DEBOUNCE_MS = 250;
     const SENT_INVITATIONS_SYNC_DEBOUNCE_MS = 250;
+    const ROUTE_WATCH_INTERVAL_MS = 500;
 
-    const pageMode = getPageMode();
+    const pageLifecycleState = createPageLifecycleState();
     const relationshipHints = new Map();
     const cardsBySlug = new Map();
     const inviteStateBySlug = new Map();
@@ -94,18 +96,110 @@
     });
 
     installProfileStatusCacheObserver();
+    installRouteChangeObserver();
+    void refreshPageMode();
 
-    if (pageMode === "group-members") {
-        initializeProfileFetchScheduler();
-        injectNetworkObserver();
-        window.addEventListener(NETWORK_HINT_EVENT, handleNetworkHints);
+    function createPageLifecycleState() {
+        return {
+            currentMode: "unsupported",
+            lastUrl: "",
+            routeTimerId: 0,
+            routeWatchIntervalId: 0,
+            groupMembersInitialized: false,
+            profilePageSyncInitialized: false,
+            sentInvitationsSyncInitialized: false
+        };
+    }
+
+    function installRouteChangeObserver() {
+        wrapHistoryMethod("pushState");
+        wrapHistoryMethod("replaceState");
+        window.addEventListener("popstate", schedulePageModeRefresh);
+        window.addEventListener("hashchange", schedulePageModeRefresh);
+        window.addEventListener("pageshow", schedulePageModeRefresh);
+        window.addEventListener("focus", schedulePageModeRefresh);
+        document.addEventListener("visibilitychange", handleVisibilityChange);
+        window.addEventListener("click", schedulePageModeRefresh, true);
+
+        pageLifecycleState.routeWatchIntervalId = window.setInterval(() => {
+            if (pageLifecycleState.lastUrl !== window.location.href) {
+                schedulePageModeRefresh();
+            }
+        }, ROUTE_WATCH_INTERVAL_MS);
+    }
+
+    function handleVisibilityChange() {
+        if (document.visibilityState === "visible") {
+            schedulePageModeRefresh();
+        }
+    }
+
+    function wrapHistoryMethod(methodName) {
+        const originalMethod = history[methodName];
+        if (typeof originalMethod !== "function") {
+            return;
+        }
+
+        history[methodName] = function (...args) {
+            const result = originalMethod.apply(this, args);
+            schedulePageModeRefresh();
+            return result;
+        };
+    }
+
+    function schedulePageModeRefresh() {
+        window.clearTimeout(pageLifecycleState.routeTimerId);
+        pageLifecycleState.routeTimerId = window.setTimeout(() => {
+            pageLifecycleState.routeTimerId = 0;
+            void refreshPageMode();
+        }, 0);
+    }
+
+    async function refreshPageMode() {
+        const nextUrl = window.location.href;
+        const nextMode = getPageMode();
+        const previousMode = pageLifecycleState.currentMode;
+        const didModeChange = previousMode !== nextMode;
+        const didUrlChange = pageLifecycleState.lastUrl !== nextUrl;
+
+        if (!didModeChange && !didUrlChange) {
+            return;
+        }
+
+        pageLifecycleState.lastUrl = nextUrl;
+        pageLifecycleState.currentMode = nextMode;
+
+        if (previousMode === "group-members" && nextMode !== "group-members") {
+            void clearProfileFetchRuntimeStats();
+        }
+
+        if (nextMode === "group-members") {
+            activateGroupMembersPage();
+            return;
+        }
+
+        if (nextMode === "profile-page") {
+            await initializeProfilePageSync();
+            return;
+        }
+
+        if (nextMode === "sent-invitations") {
+            await initializeSentInvitationsSync();
+        }
+    }
+
+    function activateGroupMembersPage() {
+        if (!pageLifecycleState.groupMembersInitialized) {
+            pageLifecycleState.groupMembersInitialized = true;
+            initializeProfileFetchScheduler();
+            injectNetworkObserver();
+            window.addEventListener(NETWORK_HINT_EVENT, handleNetworkHints);
+            mutationObserver.observe(document.body, { childList: true, subtree: true });
+        }
 
         scanCards(document);
-        mutationObserver.observe(document.body, { childList: true, subtree: true });
-    } else if (pageMode === "profile-page") {
-        void initializeProfilePageSync();
-    } else if (pageMode === "sent-invitations") {
-        void initializeSentInvitationsSync();
+        scheduleProfileFetchQueueDrain();
+        scheduleProfileFetchRuntimeStatsPublish();
     }
 
     function getPageMode() {
@@ -129,6 +223,12 @@
     async function initializeProfilePageSync() {
         await profileStatusCacheReady;
         await syncCurrentProfilePageCache();
+
+        if (pageLifecycleState.profilePageSyncInitialized) {
+            return;
+        }
+
+        pageLifecycleState.profilePageSyncInitialized = true;
 
         const profilePageObserver = new MutationObserver(() => {
             scheduleProfilePageSync();
@@ -167,6 +267,12 @@
         await profileStatusCacheReady;
         await syncSentInvitationsCache(document);
 
+        if (pageLifecycleState.sentInvitationsSyncInitialized) {
+            return;
+        }
+
+        pageLifecycleState.sentInvitationsSyncInitialized = true;
+
         const sentInvitationsObserver = new MutationObserver(() => {
             scheduleSentInvitationsSync();
         });
@@ -185,8 +291,10 @@
         installProfileFetchSettingsObserver();
         installProfileFetchSchedulerObserver();
         window.addEventListener("scroll", handleProfileFetchScroll, { passive: true });
+        window.addEventListener("pagehide", handleProfileFetchPageHide);
         void profileFetchSettingsReady;
         void profileFetchSchedulerReady;
+        scheduleProfileFetchRuntimeStatsPublish();
     }
 
     function createProfileFetchSettingsState() {
@@ -201,9 +309,17 @@
             queue: [],
             jobsBySlug: new Map(),
             activeCount: 0,
+            activeRequestCount: 0,
+            successfulCheckCount: 0,
+            lastSuccessfulCheckAt: 0,
+            totalFailedCheckCount: 0,
+            lastFailureCode: "",
+            lastFailureAt: 0,
+            failureCounts: createEmptyProfileFetchFailureCounts(),
             timerId: 0,
             scheduledDrainAt: 0,
             draining: false,
+            runtimeStatsTimerId: 0,
             lastScrollAt: Date.now(),
             nextAllowedStartAt: 0,
             failureCount: 0,
@@ -217,6 +333,18 @@
             cooldownUntil: 0,
             recentFetchStarts: [],
             leases: {}
+        };
+    }
+
+    function createEmptyProfileFetchFailureCounts() {
+        return {
+            challenge: 0,
+            "rate-limit": 0,
+            timeout: 0,
+            forbidden: 0,
+            server: 0,
+            parse: 0,
+            other: 0
         };
     }
 
@@ -244,7 +372,127 @@
             enqueuedAt: Date.now()
         });
         profileFetchSchedulerState.queue.push(profileSlug);
+        scheduleProfileFetchRuntimeStatsPublish();
         scheduleProfileFetchQueueDrain();
+    }
+
+    function scheduleProfileFetchRuntimeStatsPublish(delayMs = 0) {
+        window.clearTimeout(profileFetchSchedulerState.runtimeStatsTimerId);
+        profileFetchSchedulerState.runtimeStatsTimerId = window.setTimeout(() => {
+            profileFetchSchedulerState.runtimeStatsTimerId = 0;
+            void publishProfileFetchRuntimeStats();
+        }, Math.max(0, delayMs));
+    }
+
+    async function publishProfileFetchRuntimeStats() {
+        try {
+            await writeProfileFetchRuntimeStats(getProfileFetchRuntimeSnapshot());
+        } catch (error) {
+            if (isExtensionContextInvalidatedError(error)) {
+                return;
+            }
+
+            console.warn("[LiLi] Failed to publish runtime queue stats", error);
+        }
+    }
+
+    function isExtensionContextInvalidatedError(error) {
+        return /Extension context invalidated/i.test(String(error?.message || error || ""));
+    }
+
+    function getProfileFetchRuntimeSnapshot() {
+        const now = Date.now();
+        const queuedCount = getQueuedProfileFetchCount();
+        const gapWaitMs = Math.max(0, profileFetchSchedulerState.nextAllowedStartAt - now);
+        const cooldownWaitMs = Math.max(0, (profileFetchSchedulerState.syncedState.cooldownUntil || 0) - now);
+        const idleWaitMs = Math.max(0, profileFetchSettingsState.values.scrollIdleMs - (now - profileFetchSchedulerState.lastScrollAt));
+        const budgetWaitMs = getProfileFetchBudgetWaitMs(now);
+        const budgetBlockedUntil = budgetWaitMs > 0
+            ? (profileFetchSchedulerState.syncedState.recentFetchStarts[0] + profileFetchSettingsState.values.rollingWindowMs)
+            : 0;
+
+        return {
+            tabId: profileFetchSchedulerState.tabId,
+            pageMode: pageLifecycleState.currentMode,
+            pathName: window.location.pathname || "",
+            queuedCount,
+            activeCount: profileFetchSchedulerState.activeRequestCount,
+            successfulCheckCount: profileFetchSchedulerState.successfulCheckCount,
+            lastSuccessfulCheckAt: profileFetchSchedulerState.lastSuccessfulCheckAt || 0,
+            totalFailedCheckCount: profileFetchSchedulerState.totalFailedCheckCount,
+            lastFailureCode: profileFetchSchedulerState.lastFailureCode,
+            lastFailureAt: profileFetchSchedulerState.lastFailureAt || 0,
+            failureCounts: { ...profileFetchSchedulerState.failureCounts },
+            schedulerActiveCount: profileFetchSchedulerState.activeCount,
+            concurrency: profileFetchSettingsState.values.concurrency,
+            draining: profileFetchSchedulerState.draining,
+            failureCount: profileFetchSchedulerState.failureCount,
+            leaseCount: Object.keys(profileFetchSchedulerState.syncedState.leases || {}).length,
+            recentFetchStartsCount: (profileFetchSchedulerState.syncedState.recentFetchStarts || []).length,
+            rollingBudgetMax: profileFetchSettingsState.values.rollingBudgetMax,
+            rollingWindowMs: profileFetchSettingsState.values.rollingWindowMs,
+            backoffCapMs: profileFetchSettingsState.values.backoffCapMs,
+            baseGapMs: profileFetchSettingsState.values.baseGapMs,
+            jitterMinMs: profileFetchSettingsState.values.jitterMinMs,
+            jitterMaxMs: profileFetchSettingsState.values.jitterMaxMs,
+            scrollIdleMs: profileFetchSettingsState.values.scrollIdleMs,
+            nextAllowedStartAt: profileFetchSchedulerState.nextAllowedStartAt,
+            cooldownUntil: profileFetchSchedulerState.syncedState.cooldownUntil || 0,
+            lastScrollAt: profileFetchSchedulerState.lastScrollAt,
+            idleUntil: profileFetchSchedulerState.lastScrollAt + profileFetchSettingsState.values.scrollIdleMs,
+            budgetBlockedUntil,
+            scheduledDrainAt: profileFetchSchedulerState.scheduledDrainAt || 0,
+            gapWaitMs,
+            cooldownWaitMs,
+            idleWaitMs,
+            budgetWaitMs,
+            totalWaitMs: Math.max(gapWaitMs, cooldownWaitMs, idleWaitMs, budgetWaitMs),
+            oldestQueuedAt: getOldestQueuedAt(),
+            updatedAt: now
+        };
+    }
+
+    function getQueuedProfileFetchCount() {
+        let queuedCount = 0;
+        for (const job of profileFetchSchedulerState.jobsBySlug.values()) {
+            if (job?.status === "queued") {
+                queuedCount += 1;
+            }
+        }
+
+        return queuedCount;
+    }
+
+    function getOldestQueuedAt() {
+        let oldestQueuedAt = 0;
+
+        for (const job of profileFetchSchedulerState.jobsBySlug.values()) {
+            if (job?.status !== "queued" || !Number.isFinite(job.enqueuedAt)) {
+                continue;
+            }
+
+            oldestQueuedAt = oldestQueuedAt === 0
+                ? job.enqueuedAt
+                : Math.min(oldestQueuedAt, job.enqueuedAt);
+        }
+
+        return oldestQueuedAt;
+    }
+
+    function beginTrackedRuntimeRequest() {
+        profileFetchSchedulerState.activeRequestCount += 1;
+        scheduleProfileFetchRuntimeStatsPublish();
+    }
+
+    function endTrackedRuntimeRequest() {
+        profileFetchSchedulerState.activeRequestCount = Math.max(0, profileFetchSchedulerState.activeRequestCount - 1);
+        scheduleProfileFetchRuntimeStatsPublish();
+    }
+
+    function handleProfileFetchPageHide() {
+        window.clearTimeout(profileFetchSchedulerState.runtimeStatsTimerId);
+        profileFetchSchedulerState.runtimeStatsTimerId = 0;
+        void clearProfileFetchRuntimeStats();
     }
 
     function scheduleProfileFetchQueueDrain(delayMs = 0) {
@@ -309,16 +557,26 @@
     function handleNetworkHints(event) {
         const records = Array.isArray(event.detail) ? event.detail : [];
         for (const record of records) {
-            if (!record || record.action !== "pending" || !record.slug) {
+            if (!record?.slug) {
+                continue;
+            }
+
+            if (record.profileUrn) {
+                mergeProfileUrnIntoCache(record.slug, record.profileUrn, record.source || "network");
+            }
+
+            if (record.action !== "pending") {
                 continue;
             }
 
             const existing = relationshipHints.get(record.slug);
-            if (existing?.action === "pending") {
+            const existingCache = getCachedProfileStatus(record.slug);
+            if (existing?.action === "pending"
+                && ((existingCache?.profileUrn || "") === normalizeProfileUrn(record.profileUrn || "") || !record.profileUrn)) {
                 continue;
             }
 
-            setPendingStatus(record.slug, record.source || "network");
+            setPendingStatus(record.slug, record.source || "network", record.profileUrn);
         }
     }
 
@@ -397,6 +655,8 @@
         if (!profileUrl || !profileSlug || !(currentAction instanceof HTMLElement)) {
             return;
         }
+
+        hydrateProfileUrnFromAction(profileSlug, currentAction);
 
         const connectionDegree = getConnectionDegree(card);
         if (connectionDegree === "1st") {
@@ -478,6 +738,59 @@
     function getConnectionDegree(card) {
         const degreeText = normalizeText(card.querySelector(DEGREE_SELECTOR)?.textContent || "");
         return degreeText.replace(/^·\s*/, "");
+    }
+
+    function hydrateProfileUrnFromAction(profileSlug, actionElement) {
+        const profileUrn = getProfileUrnFromActionElement(actionElement);
+        if (!profileUrn) {
+            return;
+        }
+
+        mergeProfileUrnIntoCache(profileSlug, profileUrn, "message-link");
+    }
+
+    function getProfileUrnFromActionElement(actionElement) {
+        if (!(actionElement instanceof HTMLAnchorElement)) {
+            return "";
+        }
+
+        const href = actionElement.getAttribute("href") || "";
+        if (!href || !/\/messaging\/compose\//i.test(href)) {
+            return "";
+        }
+
+        try {
+            const url = new URL(href, LINKEDIN_ORIGIN);
+            return normalizeProfileUrn(
+                url.searchParams.get("profileUrn")
+                || url.searchParams.get("recipient")
+                || ""
+            );
+        } catch {
+            return "";
+        }
+    }
+
+    function mergeProfileUrnIntoCache(profileSlug, profileUrn, source) {
+        const normalizedProfileUrn = normalizeProfileUrn(profileUrn);
+        if (!profileSlug || !normalizedProfileUrn) {
+            return;
+        }
+
+        const existingCache = getCachedProfileStatus(profileSlug);
+        if (existingCache?.profileUrn === normalizedProfileUrn) {
+            return;
+        }
+
+        const nextExpiresAt = Date.now() + PROFILE_STATUS_CACHE_TTL_MS;
+        profileStatusBySlug.set(profileSlug, {
+            action: existingCache?.action || "connect",
+            source: existingCache?.source || source,
+            expiresAt: Math.max(existingCache?.expiresAt || 0, nextExpiresAt),
+            profileUrn: normalizedProfileUrn
+        });
+
+        void persistProfileStatusCache();
     }
 
     function buildActionElement(card, currentAction, actionKind, profileUrl, profileSlug) {
@@ -610,7 +923,7 @@
         await profileFetchSettingsReady;
         await profileFetchSchedulerReady;
 
-        if (pageMode !== "group-members" || profileFetchSchedulerState.draining) {
+        if (pageLifecycleState.currentMode !== "group-members" || profileFetchSchedulerState.draining) {
             return;
         }
 
@@ -633,6 +946,7 @@
                 profileFetchSchedulerState.jobsBySlug.delete(profileSlug);
                 profileProbeStateBySlug.delete(profileSlug);
                 rerenderCards(profileSlug);
+                scheduleProfileFetchRuntimeStatsPublish();
                 scheduleProfileFetchQueueDrain();
                 return;
             }
@@ -652,6 +966,7 @@
             profileFetchSchedulerState.queue.splice(queueIndex, 1);
             job.status = "active";
             profileFetchSchedulerState.activeCount += 1;
+            scheduleProfileFetchRuntimeStatsPublish();
             void runProfileFetchJob(profileSlug);
         } finally {
             profileFetchSchedulerState.draining = false;
@@ -734,6 +1049,7 @@
             console.debug("[LiLi] Scheduled profile fetch failed", profileSlug, error);
             profileProbeStateBySlug.set(profileSlug, { status: "failed" });
             rerenderCards(profileSlug);
+            noteProfileFetchFailure(error);
             await applyProfileFetchFailurePenalty(error);
         } finally {
             if (leaseAcquired) {
@@ -755,12 +1071,39 @@
         if (!profileFetchSchedulerState.queue.includes(profileSlug)) {
             profileFetchSchedulerState.queue.unshift(profileSlug);
         }
+
+        scheduleProfileFetchRuntimeStatsPublish();
     }
 
     function finalizeProfileFetchJob(profileSlug, preserveJob) {
         profileFetchSchedulerState.activeCount = Math.max(0, profileFetchSchedulerState.activeCount - 1);
         if (!preserveJob) {
             profileFetchSchedulerState.jobsBySlug.delete(profileSlug);
+        }
+
+        scheduleProfileFetchRuntimeStatsPublish();
+    }
+
+    function noteProfileFetchFailure(error) {
+        const failureCode = normalizeProfileFetchFailureCode(error?.liliCode);
+        profileFetchSchedulerState.totalFailedCheckCount += 1;
+        profileFetchSchedulerState.lastFailureCode = failureCode;
+        profileFetchSchedulerState.lastFailureAt = Date.now();
+        profileFetchSchedulerState.failureCounts[failureCode] = (profileFetchSchedulerState.failureCounts[failureCode] || 0) + 1;
+        scheduleProfileFetchRuntimeStatsPublish();
+    }
+
+    function normalizeProfileFetchFailureCode(code) {
+        switch (code) {
+            case "challenge":
+            case "rate-limit":
+            case "timeout":
+            case "forbidden":
+            case "server":
+            case "parse":
+                return code;
+            default:
+                return "other";
         }
     }
 
@@ -831,7 +1174,9 @@
 
     async function sendInviteWithoutNote(profileSlug) {
         try {
-            const profileRecord = await ensureProfileRecord(profileSlug);
+            const profileRecord = await ensureProfileRecord(profileSlug, {
+                forceRefresh: true
+            });
             if (profileRecord?.action === "pending") {
                 return "pending";
             }
@@ -847,58 +1192,92 @@
         }
     }
 
-    async function ensureProfileRecord(profileSlug) {
+    async function ensureProfileRecord(profileSlug, options = {}) {
         await profileStatusCacheReady;
 
+        const {
+            forceRefresh = false,
+            failClosedWithoutFreshRecord = false
+        } = options;
+
         const cachedRecord = getCachedProfileStatus(profileSlug);
-        if (cachedRecord?.profileUrn) {
+        if (!forceRefresh && cachedRecord?.profileUrn) {
             return cachedRecord;
         }
 
-        const fetchedRecord = await fetchProfileRecord(profileSlug);
-        await setCachedProfileStatus(profileSlug, fetchedRecord.action, "profile-fetch", fetchedRecord.profileUrn);
-        return getCachedProfileStatus(profileSlug) || fetchedRecord;
+        if (cachedRecord?.action === "pending") {
+            return cachedRecord;
+        }
+
+        let fetchedRecord;
+        try {
+            fetchedRecord = await fetchProfileRecord(profileSlug);
+        } catch (error) {
+            if (failClosedWithoutFreshRecord) {
+                throw error;
+            }
+
+            if (cachedRecord?.profileUrn) {
+                return cachedRecord;
+            }
+
+            throw error;
+        }
+
+        const mergedProfileUrn = fetchedRecord.profileUrn || cachedRecord?.profileUrn || "";
+        await setCachedProfileStatus(profileSlug, fetchedRecord.action, "profile-fetch", mergedProfileUrn);
+
+        return getCachedProfileStatus(profileSlug) || {
+            ...fetchedRecord,
+            profileUrn: mergedProfileUrn
+        };
     }
 
     async function sendInviteThroughApi(profileUrn) {
-        const csrfToken = getLinkedInCsrfToken();
-        if (!csrfToken) {
-            throw new Error("LinkedIn CSRF token is not available");
-        }
+        beginTrackedRuntimeRequest();
 
-        const response = await fetch(normalizeLinkedInUrl(INVITE_API_PATH), {
-            method: "POST",
-            credentials: "same-origin",
-            headers: {
-                accept: "application/vnd.linkedin.normalized+json+2.1",
-                "content-type": "application/json; charset=UTF-8",
-                "csrf-token": csrfToken,
-                "x-li-lang": getLinkedInLanguageHeader(),
-                "x-restli-protocol-version": "2.0.0"
-            },
-            body: JSON.stringify({
-                invitee: {
-                    inviteeUnion: {
-                        memberProfile: profileUrn
+        try {
+            const csrfToken = getLinkedInCsrfToken();
+            if (!csrfToken) {
+                throw new Error("LinkedIn CSRF token is not available");
+            }
+
+            const response = await fetch(normalizeLinkedInUrl(INVITE_API_PATH), {
+                method: "POST",
+                credentials: "same-origin",
+                headers: {
+                    accept: "application/vnd.linkedin.normalized+json+2.1",
+                    "content-type": "application/json; charset=UTF-8",
+                    "csrf-token": csrfToken,
+                    "x-li-lang": getLinkedInLanguageHeader(),
+                    "x-restli-protocol-version": "2.0.0"
+                },
+                body: JSON.stringify({
+                    invitee: {
+                        inviteeUnion: {
+                            memberProfile: profileUrn
+                        }
                     }
-                }
-            })
-        });
+                })
+            });
 
-        const text = await response.text();
-        if (looksLikeInvitePending(text, "POST", response.status)) {
-            return "pending";
-        }
+            const text = await response.text();
+            if (looksLikeInvitePending(text, "POST", response.status)) {
+                return "pending";
+            }
 
-        if (response.ok) {
-            return "sent";
-        }
+            if (response.ok) {
+                return "sent";
+            }
 
-        if (looksLikeInviteFailure(text, "POST", response.status)) {
+            if (looksLikeInviteFailure(text, "POST", response.status)) {
+                return "failure";
+            }
+
             return "failure";
+        } finally {
+            endTrackedRuntimeRequest();
         }
-
-        return "failure";
     }
 
     async function resolveProfileStatus(profileSlug) {
@@ -923,6 +1302,8 @@
     }
 
     async function fetchProfileRecord(profileSlug) {
+        beginTrackedRuntimeRequest();
+
         const controller = new AbortController();
         const timeoutId = window.setTimeout(() => {
             controller.abort();
@@ -964,6 +1345,10 @@
                 throw createProfileFetchError("parse", "Profile fetch returned an unexpected LinkedIn document");
             }
 
+            profileFetchSchedulerState.successfulCheckCount += 1;
+            profileFetchSchedulerState.lastSuccessfulCheckAt = Date.now();
+            scheduleProfileFetchRuntimeStatsPublish();
+
             return profileRecord;
         } catch (error) {
             if (error?.name === "AbortError") {
@@ -973,6 +1358,7 @@
             throw error;
         } finally {
             window.clearTimeout(timeoutId);
+            endTrackedRuntimeRequest();
         }
     }
 
@@ -1022,12 +1408,41 @@
 
         const encodedProfileUrnMatch = html.match(/profileUrn=urn%3Ali%3Afsd_profile%3A([^"&]+)/i);
         if (encodedProfileUrnMatch?.[1]) {
-            return `urn:li:fsd_profile:${decodeURIComponent(encodedProfileUrnMatch[1])}`;
+            return normalizeProfileUrn(`urn:li:fsd_profile:${decodeURIComponent(encodedProfileUrnMatch[1])}`);
         }
 
         const profileUrnMatch = html.match(/urn:li:fsd_profile:([A-Za-z0-9_-]+)/i);
         if (profileUrnMatch?.[1]) {
-            return `urn:li:fsd_profile:${profileUrnMatch[1]}`;
+            return normalizeProfileUrn(`urn:li:fsd_profile:${profileUrnMatch[1]}`);
+        }
+
+        return "";
+    }
+
+    function normalizeProfileUrn(value) {
+        if (typeof value !== "string") {
+            return "";
+        }
+
+        const trimmedValue = value.trim();
+        if (!trimmedValue) {
+            return "";
+        }
+
+        const directMatch = trimmedValue.match(/(?:urn:li:fsd_profile:)+([A-Za-z0-9_-]+)/i);
+        if (directMatch?.[1]) {
+            return `urn:li:fsd_profile:${directMatch[1]}`;
+        }
+
+        try {
+            const url = new URL(trimmedValue, LINKEDIN_ORIGIN);
+            const queryValue = url.searchParams.get("profileUrn") || url.searchParams.get("recipient") || "";
+            const queryMatch = queryValue.match(/(?:urn:li:fsd_profile:)+([A-Za-z0-9_-]+)/i);
+            if (queryMatch?.[1]) {
+                return `urn:li:fsd_profile:${queryMatch[1]}`;
+            }
+        } catch {
+            return "";
         }
 
         return "";
@@ -1537,6 +1952,46 @@
         }
 
         window.localStorage.setItem(PROFILE_FETCH_SCHEDULER_KEY, JSON.stringify(payload));
+    }
+
+    async function writeProfileFetchRuntimeStats(payload) {
+        const storageKey = `${PROFILE_FETCH_RUNTIME_KEY_PREFIX}${profileFetchSchedulerState.tabId}`;
+        if (chrome.storage?.local) {
+            await new Promise((resolve, reject) => {
+                chrome.storage.local.set({ [storageKey]: payload }, () => {
+                    const error = chrome.runtime?.lastError;
+                    if (error) {
+                        reject(new Error(error.message));
+                        return;
+                    }
+
+                    resolve();
+                });
+            });
+            return;
+        }
+
+        window.localStorage.setItem(storageKey, JSON.stringify(payload));
+    }
+
+    async function clearProfileFetchRuntimeStats() {
+        const storageKey = `${PROFILE_FETCH_RUNTIME_KEY_PREFIX}${profileFetchSchedulerState.tabId}`;
+        if (chrome.storage?.local) {
+            await new Promise((resolve, reject) => {
+                chrome.storage.local.remove(storageKey, () => {
+                    const error = chrome.runtime?.lastError;
+                    if (error) {
+                        reject(new Error(error.message));
+                        return;
+                    }
+
+                    resolve();
+                });
+            });
+            return;
+        }
+
+        window.localStorage.removeItem(storageKey);
     }
 
     async function readProfileFetchSettings() {

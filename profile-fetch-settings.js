@@ -1,5 +1,7 @@
 (function () {
     const SETTINGS_STORAGE_KEY = "lili-profile-fetch-settings-v1";
+    const RUNTIME_STATS_STORAGE_KEY_PREFIX = "lili-profile-fetch-runtime-v1:";
+    const RUNTIME_STATS_STALE_MS = 2 * 60 * 1000;
     const DEFAULT_PROFILE_FETCH_SETTINGS = Object.freeze({
         concurrency: 1,
         baseGapMs: 3000,
@@ -44,6 +46,8 @@
 
     globalThis.LiliProfileFetchSettings = {
         SETTINGS_STORAGE_KEY,
+        RUNTIME_STATS_STORAGE_KEY_PREFIX,
+        RUNTIME_STATS_STALE_MS,
         DEFAULT_PROFILE_FETCH_SETTINGS,
         normalizeProfileFetchSettings
     };

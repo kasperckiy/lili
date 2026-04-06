@@ -16,6 +16,125 @@
             <p class="subtitle">Tune how fallback LinkedIn profile checks are queued and throttled.</p>
         </header>
 
+        <section class="runtime-panel" aria-live="polite">
+            <div class="runtime-header">
+                <div>
+                    <p class="runtime-eyebrow">Live Queue</p>
+                    <h2>Queue and cache right now</h2>
+                </div>
+                <p id="runtime-updated" class="runtime-updated">Waiting for data</p>
+            </div>
+
+            <div class="runtime-grid">
+                <div class="runtime-stat">
+                    <span class="runtime-label">Queued</span>
+                    <strong id="runtime-queued-count">0</strong>
+                </div>
+
+                <div class="runtime-stat">
+                    <span class="runtime-label">Active</span>
+                    <strong id="runtime-active-count">0</strong>
+                </div>
+
+                <div class="runtime-stat">
+                    <span class="runtime-label">Tabs</span>
+                    <strong id="runtime-tab-count">0</strong>
+                </div>
+
+                <div class="runtime-stat">
+                    <span class="runtime-label">Checks OK</span>
+                    <strong id="runtime-successful-check-count">0</strong>
+                </div>
+
+                <div class="runtime-stat runtime-stat--wide">
+                    <span class="runtime-label">Cache entries</span>
+                    <strong id="runtime-cache-entry-count">0</strong>
+                </div>
+            </div>
+
+            <p id="runtime-meta" class="runtime-meta">Open a LinkedIn group members tab to see live queue stats.</p>
+
+            <div class="runtime-debug-grid">
+                <div class="runtime-debug-card">
+                    <p class="runtime-debug-title">Wait Gates</p>
+                    <div class="runtime-debug-list">
+                        <div class="runtime-debug-row"><span>Queue gate</span><strong
+                                id="runtime-wait-gate">none</strong></div>
+                        <div class="runtime-debug-row"><span>Gap remaining</span><strong
+                                id="runtime-gap-wait">0s</strong></div>
+                        <div class="runtime-debug-row"><span>Cooldown remaining</span><strong
+                                id="runtime-cooldown-wait">0s</strong></div>
+                        <div class="runtime-debug-row"><span>Idle remaining</span><strong
+                                id="runtime-idle-wait">0s</strong></div>
+                        <div class="runtime-debug-row"><span>Budget remaining</span><strong
+                                id="runtime-budget-wait">0s</strong></div>
+                        <div class="runtime-debug-row"><span>Next drain</span><strong id="runtime-next-drain">not
+                                scheduled</strong></div>
+                    </div>
+                </div>
+
+                <div class="runtime-debug-card">
+                    <p class="runtime-debug-title">Scheduler State</p>
+                    <div class="runtime-debug-list">
+                        <div class="runtime-debug-row"><span>Scheduler jobs</span><strong id="runtime-scheduler-jobs">0
+                                / 0</strong></div>
+                        <div class="runtime-debug-row"><span>Oldest queued</span><strong
+                                id="runtime-oldest-queued">0s</strong></div>
+                        <div class="runtime-debug-row"><span>Recent starts</span><strong id="runtime-recent-starts">0 /
+                                0</strong></div>
+                        <div class="runtime-debug-row"><span>Failure streak</span><strong
+                                id="runtime-failure-count">0</strong></div>
+                        <div class="runtime-debug-row"><span>Failed total</span><strong
+                                id="runtime-failed-total">0</strong></div>
+                        <div class="runtime-debug-row"><span>Leases</span><strong id="runtime-lease-count">0</strong>
+                        </div>
+                        <div class="runtime-debug-row"><span>Last failure</span><strong
+                                id="runtime-last-failure">none</strong></div>
+                        <div class="runtime-debug-row"><span>Last check OK</span><strong
+                                id="runtime-last-success">never</strong></div>
+                    </div>
+                </div>
+
+                <div class="runtime-debug-card runtime-debug-card--full">
+                    <p class="runtime-debug-title">Failure Breakdown</p>
+                    <div class="runtime-debug-list runtime-debug-list--two">
+                        <div class="runtime-debug-row"><span>Challenge</span><strong
+                                id="runtime-failure-challenge">0</strong></div>
+                        <div class="runtime-debug-row"><span>Rate limit</span><strong
+                                id="runtime-failure-rate-limit">0</strong></div>
+                        <div class="runtime-debug-row"><span>Timeout</span><strong
+                                id="runtime-failure-timeout">0</strong></div>
+                        <div class="runtime-debug-row"><span>Forbidden</span><strong
+                                id="runtime-failure-forbidden">0</strong></div>
+                        <div class="runtime-debug-row"><span>Server</span><strong id="runtime-failure-server">0</strong>
+                        </div>
+                        <div class="runtime-debug-row"><span>Parse</span><strong id="runtime-failure-parse">0</strong>
+                        </div>
+                        <div class="runtime-debug-row"><span>Other</span><strong id="runtime-failure-other">0</strong>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="runtime-debug-card runtime-debug-card--full">
+                    <p class="runtime-debug-title">Effective Settings</p>
+                    <div class="runtime-debug-list runtime-debug-list--three">
+                        <div class="runtime-debug-row"><span>Concurrency</span><strong
+                                id="runtime-setting-concurrency">0</strong></div>
+                        <div class="runtime-debug-row"><span>Base gap</span><strong
+                                id="runtime-setting-base-gap">0s</strong></div>
+                        <div class="runtime-debug-row"><span>Jitter</span><strong
+                                id="runtime-setting-jitter">0s-0s</strong></div>
+                        <div class="runtime-debug-row"><span>Scroll idle</span><strong
+                                id="runtime-setting-scroll-idle">0s</strong></div>
+                        <div class="runtime-debug-row"><span>Rolling budget</span><strong id="runtime-setting-budget">0
+                                / 0</strong></div>
+                        <div class="runtime-debug-row"><span>Backoff cap</span><strong
+                                id="runtime-setting-backoff-cap">0s</strong></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
         <form id="settings-form" class="settings-form">
             <label class="field">
                 <span>Concurrency</span>
