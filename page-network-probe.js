@@ -10,6 +10,8 @@
     const originalFetch = window.fetch;
     const originalOpen = XMLHttpRequest.prototype.open;
     const originalSend = XMLHttpRequest.prototype.send;
+    const relationshipUrnToSlug = new Map();
+    const profileUrnToSlug = new Map();
 
     scanEmbeddedRelationshipHints();
 
@@ -192,15 +194,18 @@
         }
 
         function collectFromIncluded(included) {
-            const relationshipUrnToSlug = new Map();
-
             for (const entity of included) {
                 if (!entity || typeof entity !== "object") {
                     continue;
                 }
 
                 const slug = getVoyagerProfileSlug(entity);
+                const profileUrn = getVoyagerProfileUrn(entity);
                 const relationshipUrn = getVoyagerRelationshipUrn(entity);
+                if (slug && profileUrn) {
+                    profileUrnToSlug.set(profileUrn, slug);
+                }
+
                 if (slug && relationshipUrn) {
                     relationshipUrnToSlug.set(relationshipUrn, slug);
                 }
@@ -221,7 +226,10 @@
                     continue;
                 }
 
-                const slug = relationshipUrnToSlug.get(entity.entityUrn) || extractSlug(entity);
+                const slug = relationshipUrnToSlug.get(entity.entityUrn)
+                    || profileUrnToSlug.get(entity.entityUrn)
+                    || resolveSlugFromKnownUrns(entity)
+                    || extractSlug(entity);
                 if (!slug) {
                     continue;
                 }
@@ -309,11 +317,46 @@
         return typeof slug === "string" && isValidSlug(slug) ? slug : "";
     }
 
+    function getVoyagerProfileUrn(entity) {
+        const profileUrn = entity.entityUrn
+            || entity.profileUrn
+            || entity.profile?.entityUrn
+            || entity.profileResolutionResult?.entityUrn;
+        return typeof profileUrn === "string" && /fsd_profile/i.test(profileUrn) ? profileUrn : "";
+    }
+
     function getVoyagerRelationshipUrn(entity) {
         const relationshipUrn = entity["*memberRelationship"]
             || entity.memberRelationshipUrn
             || entity.memberRelationshipWrapper?.memberRelationshipUrn;
         return typeof relationshipUrn === "string" ? relationshipUrn : "";
+    }
+
+    function resolveSlugFromKnownUrns(entity) {
+        const candidateUrns = [
+            entity["*targetInviteeResolutionResult"],
+            entity["*inviteeResolutionResult"],
+            entity["*profileResolutionResult"],
+            entity.noConnection?.invitation?.noInvitation?.["*targetInviteeResolutionResult"],
+            entity.noConnection?.invitationUnion?.invitation?.["*targetInviteeResolutionResult"],
+            entity.memberRelationshipData?.noInvitation?.["*targetInviteeResolutionResult"],
+            entity.memberRelationshipDataResolutionResult?.noInvitation?.["*targetInviteeResolutionResult"],
+            entity.memberRelationshipData?.invitation?.["*targetInviteeResolutionResult"],
+            entity.memberRelationshipDataResolutionResult?.invitation?.["*targetInviteeResolutionResult"]
+        ];
+
+        for (const profileUrn of candidateUrns) {
+            if (typeof profileUrn !== "string") {
+                continue;
+            }
+
+            const slug = profileUrnToSlug.get(profileUrn);
+            if (slug) {
+                return slug;
+            }
+        }
+
+        return "";
     }
 
     function hasPendingProfileAction(entity) {
