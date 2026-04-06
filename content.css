@@ -1,4 +1,6 @@
-.lili-connect-action {
+.lili-connect-action,
+.lili-sending-action,
+.lili-pending-action {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -9,17 +11,26 @@
 
 .lili-connect-action:hover,
 .lili-connect-action:focus,
-.lili-connect-action:active {
+.lili-connect-action:active,
+.lili-sending-action:hover,
+.lili-sending-action:focus,
+.lili-sending-action:active,
+.lili-pending-action:hover,
+.lili-pending-action:focus,
+.lili-pending-action:active {
     text-decoration: none;
 }
 
-.lili-connect-action .artdeco-button__text {
+.lili-connect-action .artdeco-button__text,
+.lili-sending-action .artdeco-button__text,
+.lili-pending-action .artdeco-button__text {
     display: inline-flex;
     align-items: center;
     gap: 0.25rem;
 }
 
-.lili-connect-action.artdeco-button--primary {
+.lili-connect-action.artdeco-button--primary,
+.lili-sending-action.artdeco-button--primary {
     background-color: #0a66c2;
     border-color: #0a66c2;
     color: #ffffff;
@@ -32,6 +43,20 @@
     color: #ffffff;
 }
 
+.lili-sending-action.artdeco-button--primary,
+.lili-sending-action.artdeco-button--primary:hover,
+.lili-sending-action.artdeco-button--primary:focus {
+    background-color: #5b8ec4;
+    border-color: #5b8ec4;
+    color: #ffffff;
+}
+
 .lili-pending-action.artdeco-button--secondary {
     border-style: dashed;
+}
+
+.lili-sending-action[disabled],
+.lili-pending-action[disabled] {
+    cursor: default;
+    opacity: 1;
 }
