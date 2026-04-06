@@ -9,13 +9,28 @@
     const DEGREE_SELECTOR = ".artdeco-entity-lockup__degree";
     const NAME_SELECTOR = ".entity-action-title";
     const ACTION_SELECTOR = ".entry-point .lili-connect-action, .entry-point .lili-pending-action, .entry-point .lili-sending-action, .entry-point .lili-loading-action, .entry-point button.artdeco-button[aria-label*='Message'], .entry-point a[aria-label*='Message']";
-    const OBSERVER_MARGIN = "300px";
+    const OBSERVER_MARGIN_PX = 300;
+    const OBSERVER_MARGIN = `${OBSERVER_MARGIN_PX}px`;
     const NETWORK_HINT_EVENT = "lili:relationship-hints";
     const INVITE_API_PATH = "/voyager/api/voyagerRelationshipsDashMemberRelationships?action=verifyQuotaAndCreateV2&decorationId=com.linkedin.voyager.dash.deco.relationships.InvitationCreationResultWithInvitee-2";
     const PROFILE_FETCH_TIMEOUT_MS = 15000;
-    const PROFILE_REQUEST_DELAY_MIN_MS = 1;
-    const PROFILE_REQUEST_DELAY_MAX_MS = 10000;
+    const PROFILE_FETCH_BACKOFF_INITIAL_MS = 30000;
+    const PROFILE_FETCH_LEASE_TTL_MS = PROFILE_FETCH_TIMEOUT_MS + 5000;
+    const PROFILE_FETCH_LEASE_RETRY_MIN_MS = 1000;
+    const profileFetchSettingsApi = globalThis.LiliProfileFetchSettings || null;
+    const PROFILE_FETCH_SETTINGS_KEY = profileFetchSettingsApi?.SETTINGS_STORAGE_KEY || "lili-profile-fetch-settings-v1";
+    const DEFAULT_PROFILE_FETCH_SETTINGS = profileFetchSettingsApi?.DEFAULT_PROFILE_FETCH_SETTINGS || {
+        concurrency: 1,
+        baseGapMs: 3000,
+        jitterMinMs: 0,
+        jitterMaxMs: 10000,
+        scrollIdleMs: 1000,
+        rollingBudgetMax: 8,
+        rollingWindowMs: 5 * 60 * 1000,
+        backoffCapMs: 10 * 60 * 1000
+    };
     const PROFILE_STATUS_CACHE_KEY = "lili-profile-status-cache-v2";
+    const PROFILE_FETCH_SCHEDULER_KEY = "lili-profile-fetch-scheduler-v1";
     const PROFILE_STATUS_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
     const PROFILE_PAGE_SYNC_DEBOUNCE_MS = 250;
     const SENT_INVITATIONS_SYNC_DEBOUNCE_MS = 250;
@@ -26,7 +41,11 @@
     const inviteStateBySlug = new Map();
     const profileStatusBySlug = new Map();
     const profileProbeStateBySlug = new Map();
+    const profileFetchSettingsState = createProfileFetchSettingsState();
+    const profileFetchSchedulerState = createProfileFetchSchedulerState();
     const profileStatusCacheReady = loadProfileStatusCache();
+    const profileFetchSettingsReady = loadProfileFetchSettings();
+    const profileFetchSchedulerReady = loadProfileFetchSchedulerState();
     const profilePageSyncState = {
         timeoutId: 0
     };
@@ -41,24 +60,43 @@
     });
 
     const mutationObserver = new MutationObserver((mutations) => {
+        const touchedCards = new Set();
+
         for (const mutation of mutations) {
+            const targetCard = mutation.target instanceof Element
+                ? mutation.target.closest(CARD_SELECTOR)
+                : null;
+            if (targetCard instanceof HTMLElement) {
+                touchedCards.add(targetCard);
+            }
+
             for (const node of mutation.addedNodes) {
                 if (!(node instanceof Element)) {
                     continue;
                 }
 
-                if (node.matches?.(CARD_SELECTOR)) {
-                    observeCard(node);
+                const closestCard = node.closest?.(CARD_SELECTOR);
+                if (closestCard instanceof HTMLElement) {
+                    touchedCards.add(closestCard);
                 }
 
-                node.querySelectorAll?.(CARD_SELECTOR).forEach(observeCard);
+                if (node.matches?.(CARD_SELECTOR)) {
+                    touchedCards.add(node);
+                }
+
+                node.querySelectorAll?.(CARD_SELECTOR).forEach((card) => {
+                    touchedCards.add(card);
+                });
             }
         }
+
+        touchedCards.forEach(reconcileCardMutation);
     });
 
     installProfileStatusCacheObserver();
 
     if (pageMode === "group-members") {
+        initializeProfileFetchScheduler();
         injectNetworkObserver();
         window.addEventListener(NETWORK_HINT_EVENT, handleNetworkHints);
 
@@ -143,6 +181,89 @@
         }, SENT_INVITATIONS_SYNC_DEBOUNCE_MS);
     }
 
+    function initializeProfileFetchScheduler() {
+        installProfileFetchSettingsObserver();
+        installProfileFetchSchedulerObserver();
+        window.addEventListener("scroll", handleProfileFetchScroll, { passive: true });
+        void profileFetchSettingsReady;
+        void profileFetchSchedulerReady;
+    }
+
+    function createProfileFetchSettingsState() {
+        return {
+            values: normalizeProfileFetchSettings(DEFAULT_PROFILE_FETCH_SETTINGS)
+        };
+    }
+
+    function createProfileFetchSchedulerState() {
+        return {
+            tabId: createTabInstanceId(),
+            queue: [],
+            jobsBySlug: new Map(),
+            activeCount: 0,
+            timerId: 0,
+            scheduledDrainAt: 0,
+            draining: false,
+            lastScrollAt: Date.now(),
+            nextAllowedStartAt: 0,
+            failureCount: 0,
+            storageMutationPromise: Promise.resolve(),
+            syncedState: createEmptyProfileFetchSchedulerStorageState()
+        };
+    }
+
+    function createEmptyProfileFetchSchedulerStorageState() {
+        return {
+            cooldownUntil: 0,
+            recentFetchStarts: [],
+            leases: {}
+        };
+    }
+
+    function createTabInstanceId() {
+        if (globalThis.crypto?.randomUUID) {
+            return globalThis.crypto.randomUUID();
+        }
+
+        return `lili-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    }
+
+    function handleProfileFetchScroll() {
+        profileFetchSchedulerState.lastScrollAt = Date.now();
+        scheduleProfileFetchQueueDrain(profileFetchSettingsState.values.scrollIdleMs);
+    }
+
+    function enqueueProfileStatusResolution(profileSlug) {
+        if (!profileSlug || profileFetchSchedulerState.jobsBySlug.has(profileSlug)) {
+            return;
+        }
+
+        profileFetchSchedulerState.jobsBySlug.set(profileSlug, {
+            slug: profileSlug,
+            status: "queued",
+            enqueuedAt: Date.now()
+        });
+        profileFetchSchedulerState.queue.push(profileSlug);
+        scheduleProfileFetchQueueDrain();
+    }
+
+    function scheduleProfileFetchQueueDrain(delayMs = 0) {
+        const normalizedDelayMs = Math.max(0, Math.floor(delayMs));
+        const scheduledDrainAt = Date.now() + normalizedDelayMs;
+
+        if (profileFetchSchedulerState.timerId && profileFetchSchedulerState.scheduledDrainAt <= scheduledDrainAt) {
+            return;
+        }
+
+        window.clearTimeout(profileFetchSchedulerState.timerId);
+        profileFetchSchedulerState.scheduledDrainAt = scheduledDrainAt;
+        profileFetchSchedulerState.timerId = window.setTimeout(() => {
+            profileFetchSchedulerState.timerId = 0;
+            profileFetchSchedulerState.scheduledDrainAt = 0;
+            void drainProfileFetchQueue();
+        }, normalizedDelayMs);
+    }
+
     async function syncSentInvitationsCache(root) {
         const profileSlugs = collectSentInvitationProfileSlugs(root);
         if (profileSlugs.size === 0) {
@@ -216,6 +337,34 @@
 
         card.dataset.liliPriorityObserved = "1";
         intersectionObserver.observe(card);
+
+        if (isCardWithinObserverMargin(card)) {
+            intersectionObserver.unobserve(card);
+            processCard(card);
+        }
+    }
+
+    function isCardWithinObserverMargin(card) {
+        if (!(card instanceof HTMLElement)) {
+            return false;
+        }
+
+        const rect = card.getBoundingClientRect();
+        return rect.bottom >= -OBSERVER_MARGIN_PX
+            && rect.top <= window.innerHeight + OBSERVER_MARGIN_PX;
+    }
+
+    function reconcileCardMutation(card) {
+        if (!(card instanceof HTMLElement) || !card.isConnected) {
+            return;
+        }
+
+        if (card.dataset.liliPriorityProcessed === "1" || card.dataset.liliPriorityObserved === "1") {
+            processCard(card);
+            return;
+        }
+
+        observeCard(card);
     }
 
     function processCard(card) {
@@ -457,6 +606,207 @@
         rerenderCards(profileSlug);
     }
 
+    async function drainProfileFetchQueue() {
+        await profileFetchSettingsReady;
+        await profileFetchSchedulerReady;
+
+        if (pageMode !== "group-members" || profileFetchSchedulerState.draining) {
+            return;
+        }
+
+        profileFetchSchedulerState.draining = true;
+
+        try {
+            if (profileFetchSchedulerState.activeCount >= profileFetchSettingsState.values.concurrency) {
+                return;
+            }
+
+            const nextQueuedJob = getNextQueuedProfileJob();
+            if (!nextQueuedJob) {
+                return;
+            }
+
+            const { profileSlug, queueIndex } = nextQueuedJob;
+
+            if (shouldSkipQueuedProfileFetch(profileSlug)) {
+                profileFetchSchedulerState.queue.splice(queueIndex, 1);
+                profileFetchSchedulerState.jobsBySlug.delete(profileSlug);
+                profileProbeStateBySlug.delete(profileSlug);
+                rerenderCards(profileSlug);
+                scheduleProfileFetchQueueDrain();
+                return;
+            }
+
+            const waitMs = getNextProfileFetchWaitMs();
+            if (waitMs > 0) {
+                scheduleProfileFetchQueueDrain(waitMs);
+                return;
+            }
+
+            const job = profileFetchSchedulerState.jobsBySlug.get(profileSlug);
+            if (!job) {
+                scheduleProfileFetchQueueDrain();
+                return;
+            }
+
+            profileFetchSchedulerState.queue.splice(queueIndex, 1);
+            job.status = "active";
+            profileFetchSchedulerState.activeCount += 1;
+            void runProfileFetchJob(profileSlug);
+        } finally {
+            profileFetchSchedulerState.draining = false;
+        }
+    }
+
+    function getNextQueuedProfileJob() {
+        const queuedCandidates = [];
+
+        for (let index = profileFetchSchedulerState.queue.length - 1; index >= 0; index -= 1) {
+            const profileSlug = profileFetchSchedulerState.queue[index];
+            const job = profileFetchSchedulerState.jobsBySlug.get(profileSlug);
+            if (!job || job.status !== "queued") {
+                profileFetchSchedulerState.queue.splice(index, 1);
+                continue;
+            }
+
+            queuedCandidates.push({
+                profileSlug,
+                queueIndex: index
+            });
+        }
+
+        if (queuedCandidates.length === 0) {
+            return null;
+        }
+
+        return queuedCandidates[Math.floor(Math.random() * queuedCandidates.length)];
+    }
+
+    function shouldSkipQueuedProfileFetch(profileSlug) {
+        return Boolean(relationshipHints.get(profileSlug)?.action === "pending"
+            || getCachedProfileStatus(profileSlug)
+            || inviteStateBySlug.get(profileSlug)?.action === "sending");
+    }
+
+    function getNextProfileFetchWaitMs() {
+        const now = Date.now();
+        const gapWaitMs = Math.max(0, profileFetchSchedulerState.nextAllowedStartAt - now);
+        const cooldownWaitMs = Math.max(0, (profileFetchSchedulerState.syncedState.cooldownUntil || 0) - now);
+        const idleWaitMs = Math.max(0, profileFetchSettingsState.values.scrollIdleMs - (now - profileFetchSchedulerState.lastScrollAt));
+        const budgetWaitMs = getProfileFetchBudgetWaitMs(now);
+
+        return Math.max(gapWaitMs, cooldownWaitMs, idleWaitMs, budgetWaitMs);
+    }
+
+    function getProfileFetchBudgetWaitMs(now) {
+        const recentFetchStarts = profileFetchSchedulerState.syncedState.recentFetchStarts || [];
+        if (recentFetchStarts.length < profileFetchSettingsState.values.rollingBudgetMax) {
+            return 0;
+        }
+
+        const earliestAllowedAt = recentFetchStarts[0] + profileFetchSettingsState.values.rollingWindowMs;
+        return Math.max(0, earliestAllowedAt - now);
+    }
+
+    async function runProfileFetchJob(profileSlug) {
+        let preserveJob = false;
+        let retryDelayMs = 0;
+        let leaseAcquired = false;
+
+        try {
+            const leaseResult = await tryAcquireProfileFetchLease(profileSlug);
+            if (!leaseResult.acquired) {
+                preserveJob = true;
+                retryDelayMs = leaseResult.retryAfterMs;
+                requeueProfileFetchJob(profileSlug);
+                return;
+            }
+
+            leaseAcquired = true;
+            const startedAt = Date.now();
+            profileFetchSchedulerState.nextAllowedStartAt = startedAt
+                + profileFetchSettingsState.values.baseGapMs
+                + getRandomProfileFetchJitterMs();
+            await registerProfileFetchStart(startedAt);
+            await resolveProfileStatus(profileSlug);
+            profileFetchSchedulerState.failureCount = 0;
+        } catch (error) {
+            console.debug("[LiLi] Scheduled profile fetch failed", profileSlug, error);
+            profileProbeStateBySlug.set(profileSlug, { status: "failed" });
+            rerenderCards(profileSlug);
+            await applyProfileFetchFailurePenalty(error);
+        } finally {
+            if (leaseAcquired) {
+                await releaseProfileFetchLease(profileSlug);
+            }
+
+            finalizeProfileFetchJob(profileSlug, preserveJob);
+            scheduleProfileFetchQueueDrain(retryDelayMs);
+        }
+    }
+
+    function requeueProfileFetchJob(profileSlug) {
+        const job = profileFetchSchedulerState.jobsBySlug.get(profileSlug);
+        if (!job) {
+            return;
+        }
+
+        job.status = "queued";
+        if (!profileFetchSchedulerState.queue.includes(profileSlug)) {
+            profileFetchSchedulerState.queue.unshift(profileSlug);
+        }
+    }
+
+    function finalizeProfileFetchJob(profileSlug, preserveJob) {
+        profileFetchSchedulerState.activeCount = Math.max(0, profileFetchSchedulerState.activeCount - 1);
+        if (!preserveJob) {
+            profileFetchSchedulerState.jobsBySlug.delete(profileSlug);
+        }
+    }
+
+    async function registerProfileFetchStart(startedAt) {
+        await mutateProfileFetchSchedulerState((state) => {
+            state.recentFetchStarts.push(startedAt);
+            return state;
+        });
+    }
+
+    async function applyProfileFetchFailurePenalty(error) {
+        const penaltyMs = getProfileFetchFailurePenaltyMs(error);
+        if (penaltyMs <= 0) {
+            return;
+        }
+
+        profileFetchSchedulerState.failureCount = Math.min(profileFetchSchedulerState.failureCount + 1, 8);
+        const cooldownMs = Math.min(
+            profileFetchSettingsState.values.backoffCapMs,
+            penaltyMs * (2 ** (profileFetchSchedulerState.failureCount - 1))
+        );
+        const cooldownUntil = Date.now() + cooldownMs;
+        profileFetchSchedulerState.nextAllowedStartAt = Math.max(profileFetchSchedulerState.nextAllowedStartAt, cooldownUntil);
+
+        await mutateProfileFetchSchedulerState((state) => {
+            state.cooldownUntil = Math.max(state.cooldownUntil || 0, cooldownUntil);
+            return state;
+        });
+    }
+
+    function getProfileFetchFailurePenaltyMs(error) {
+        switch (error?.liliCode) {
+            case "rate-limit":
+            case "challenge":
+                return PROFILE_FETCH_BACKOFF_INITIAL_MS;
+            case "forbidden":
+                return 15000;
+            case "timeout":
+            case "parse":
+            case "server":
+                return 10000;
+            default:
+                return 0;
+        }
+    }
+
     function primeProfileStatus(profileSlug, connectionDegree) {
         if (!profileSlug || connectionDegree === "1st") {
             return;
@@ -476,12 +826,7 @@
         }
 
         profileProbeStateBySlug.set(profileSlug, { status: "loading" });
-        void resolveProfileStatus(profileSlug)
-            .catch((error) => {
-                console.debug("[LiLi] Profile fetch failed", profileSlug, error);
-                profileProbeStateBySlug.set(profileSlug, { status: "failed" });
-                rerenderCards(profileSlug);
-            });
+        enqueueProfileStatusResolution(profileSlug);
     }
 
     async function sendInviteWithoutNote(profileSlug) {
@@ -565,14 +910,6 @@
             return;
         }
 
-        await delay(getRandomProfileDelayMs());
-
-        if (relationshipHints.get(profileSlug)?.action === "pending" || getCachedProfileStatus(profileSlug)) {
-            profileProbeStateBySlug.delete(profileSlug);
-            rerenderCards(profileSlug);
-            return;
-        }
-
         const profileRecord = await fetchProfileRecord(profileSlug);
         profileProbeStateBySlug.delete(profileSlug);
 
@@ -602,11 +939,38 @@
             });
 
             if (!response.ok) {
+                if (response.status === 429) {
+                    throw createProfileFetchError("rate-limit", `Profile fetch failed with status ${response.status}`);
+                }
+
+                if (response.status === 403) {
+                    throw createProfileFetchError("forbidden", `Profile fetch failed with status ${response.status}`);
+                }
+
+                if (response.status >= 500) {
+                    throw createProfileFetchError("server", `Profile fetch failed with status ${response.status}`);
+                }
+
                 throw new Error(`Profile fetch failed with status ${response.status}`);
             }
 
             const html = await response.text();
-            return getProfileDocumentRecord(html);
+            if (looksLikeProtectedProfileFetchHtml(html)) {
+                throw createProfileFetchError("challenge", "Profile fetch returned a LinkedIn challenge page");
+            }
+
+            const profileRecord = getProfileDocumentRecord(html);
+            if (looksLikeUnexpectedProfileFetchHtml(html, profileRecord)) {
+                throw createProfileFetchError("parse", "Profile fetch returned an unexpected LinkedIn document");
+            }
+
+            return profileRecord;
+        } catch (error) {
+            if (error?.name === "AbortError") {
+                throw createProfileFetchError("timeout", "Profile fetch timed out");
+            }
+
+            throw error;
         } finally {
             window.clearTimeout(timeoutId);
         }
@@ -669,10 +1033,41 @@
         return "";
     }
 
-    function getRandomProfileDelayMs() {
-        return Math.floor(Math.random() * (PROFILE_REQUEST_DELAY_MAX_MS - PROFILE_REQUEST_DELAY_MIN_MS + 1))
-            + PROFILE_REQUEST_DELAY_MIN_MS;
+    function looksLikeProtectedProfileFetchHtml(html) {
+        return /(captcha|security verification|verify to continue|unusual activity|challenge|let'?s do a quick security check)/i.test(html || "");
     }
+
+    function looksLikeUnexpectedProfileFetchHtml(html, profileRecord) {
+        if (!html) {
+            return true;
+        }
+
+        if (profileRecord?.profileUrn) {
+            return false;
+        }
+
+        return !/(stringValue\\":\\"Pending\\"|stringValue":"Pending"|stringValue\\":\\"Connect\\"|stringValue":"Connect"|Pending, click to withdraw invitation sent to|artdeco-entity-lockup|profile-displayphoto)/i.test(html);
+    }
+
+    function createProfileFetchError(code, message) {
+        const error = new Error(message);
+        error.liliCode = code;
+        return error;
+    }
+
+    function getRandomProfileFetchJitterMs() {
+        const { jitterMinMs, jitterMaxMs } = profileFetchSettingsState.values;
+        return Math.floor(Math.random() * (jitterMaxMs - jitterMinMs + 1))
+            + jitterMinMs;
+    }
+    function normalizeProfileFetchSettings(value) {
+        if (profileFetchSettingsApi?.normalizeProfileFetchSettings) {
+            return profileFetchSettingsApi.normalizeProfileFetchSettings(value);
+        }
+
+        return DEFAULT_PROFILE_FETCH_SETTINGS;
+    }
+
 
     function getCachedProfileStatus(profileSlug) {
         const record = profileStatusBySlug.get(profileSlug);
@@ -834,6 +1229,183 @@
         });
     }
 
+    async function loadProfileFetchSchedulerState() {
+        try {
+            await profileFetchSettingsReady;
+            const { state, didPrune } = normalizeProfileFetchSchedulerStorageState(await readProfileFetchSchedulerState());
+            replaceLocalProfileFetchSchedulerState(state);
+
+            if (didPrune) {
+                await writeProfileFetchSchedulerState(state);
+            }
+        } catch (error) {
+            console.warn("[LiLi] Failed to load profile fetch scheduler state", error);
+        }
+    }
+
+    async function loadProfileFetchSettings() {
+        try {
+            replaceLocalProfileFetchSettings(await readProfileFetchSettings());
+        } catch (error) {
+            console.warn("[LiLi] Failed to load profile fetch settings", error);
+        }
+    }
+
+    function replaceLocalProfileFetchSettings(nextSettings) {
+        profileFetchSettingsState.values = normalizeProfileFetchSettings(nextSettings);
+    }
+
+    function installProfileFetchSettingsObserver() {
+        if (!chrome.storage?.onChanged) {
+            return;
+        }
+
+        chrome.storage.onChanged.addListener((changes, areaName) => {
+            if (areaName !== "local") {
+                return;
+            }
+
+            const change = changes[PROFILE_FETCH_SETTINGS_KEY];
+            if (!change) {
+                return;
+            }
+
+            replaceLocalProfileFetchSettings(change.newValue || DEFAULT_PROFILE_FETCH_SETTINGS);
+            scheduleProfileFetchQueueDrain();
+        });
+    }
+
+    function installProfileFetchSchedulerObserver() {
+        if (!chrome.storage?.onChanged) {
+            return;
+        }
+
+        chrome.storage.onChanged.addListener((changes, areaName) => {
+            if (areaName !== "local") {
+                return;
+            }
+
+            const change = changes[PROFILE_FETCH_SCHEDULER_KEY];
+            if (!change) {
+                return;
+            }
+
+            const { state } = normalizeProfileFetchSchedulerStorageState(change.newValue || {});
+            replaceLocalProfileFetchSchedulerState(state);
+            scheduleProfileFetchQueueDrain();
+        });
+    }
+
+    function normalizeProfileFetchSchedulerStorageState(storedState) {
+        const now = Date.now();
+        const nextState = createEmptyProfileFetchSchedulerStorageState();
+        let didPrune = false;
+
+        if (storedState && typeof storedState === "object") {
+            if (Number.isFinite(storedState.cooldownUntil) && storedState.cooldownUntil > now) {
+                nextState.cooldownUntil = storedState.cooldownUntil;
+            } else if (storedState.cooldownUntil) {
+                didPrune = true;
+            }
+
+            if (Array.isArray(storedState.recentFetchStarts)) {
+                nextState.recentFetchStarts = storedState.recentFetchStarts
+                    .filter((timestamp) => Number.isFinite(timestamp) && timestamp > now - profileFetchSettingsState.values.rollingWindowMs)
+                    .sort((left, right) => left - right);
+                didPrune = didPrune || nextState.recentFetchStarts.length !== storedState.recentFetchStarts.length;
+            }
+
+            if (storedState.leases && typeof storedState.leases === "object") {
+                for (const [profileSlug, lease] of Object.entries(storedState.leases)) {
+                    if (!lease || typeof lease.owner !== "string" || !Number.isFinite(lease.expiresAt) || lease.expiresAt <= now) {
+                        didPrune = true;
+                        continue;
+                    }
+
+                    nextState.leases[profileSlug] = {
+                        owner: lease.owner,
+                        expiresAt: lease.expiresAt
+                    };
+                }
+            }
+        }
+
+        return {
+            state: nextState,
+            didPrune
+        };
+    }
+
+    function replaceLocalProfileFetchSchedulerState(nextState) {
+        profileFetchSchedulerState.syncedState = nextState;
+        profileFetchSchedulerState.nextAllowedStartAt = Math.max(
+            profileFetchSchedulerState.nextAllowedStartAt,
+            nextState.cooldownUntil || 0
+        );
+    }
+
+    function mutateProfileFetchSchedulerState(mutation) {
+        const runMutation = async () => {
+            const { state: currentState } = normalizeProfileFetchSchedulerStorageState(await readProfileFetchSchedulerState());
+            const mutatedState = mutation(structuredClone(currentState)) || currentState;
+            const { state: nextState } = normalizeProfileFetchSchedulerStorageState(mutatedState);
+            await writeProfileFetchSchedulerState(nextState);
+            replaceLocalProfileFetchSchedulerState(nextState);
+            return nextState;
+        };
+
+        const mutationPromise = profileFetchSchedulerState.storageMutationPromise.then(runMutation, runMutation);
+        profileFetchSchedulerState.storageMutationPromise = mutationPromise.then(() => undefined, () => undefined);
+        return mutationPromise;
+    }
+
+    async function tryAcquireProfileFetchLease(profileSlug) {
+        const now = Date.now();
+        const nextLease = {
+            owner: profileFetchSchedulerState.tabId,
+            expiresAt: now + PROFILE_FETCH_LEASE_TTL_MS
+        };
+
+        await mutateProfileFetchSchedulerState((state) => {
+            const existingLease = state.leases[profileSlug];
+            if (existingLease && existingLease.owner !== profileFetchSchedulerState.tabId && existingLease.expiresAt > now) {
+                return state;
+            }
+
+            state.leases[profileSlug] = nextLease;
+            return state;
+        });
+
+        const { state: verifiedState } = normalizeProfileFetchSchedulerStorageState(await readProfileFetchSchedulerState());
+        replaceLocalProfileFetchSchedulerState(verifiedState);
+
+        const verifiedLease = verifiedState.leases[profileSlug];
+        if (verifiedLease?.owner === profileFetchSchedulerState.tabId && verifiedLease.expiresAt > now) {
+            return {
+                acquired: true,
+                retryAfterMs: 0
+            };
+        }
+
+        return {
+            acquired: false,
+            retryAfterMs: Math.max(
+                PROFILE_FETCH_LEASE_RETRY_MIN_MS,
+                (verifiedLease?.expiresAt || now + PROFILE_FETCH_LEASE_RETRY_MIN_MS) - now
+            )
+        };
+    }
+
+    async function releaseProfileFetchLease(profileSlug) {
+        await mutateProfileFetchSchedulerState((state) => {
+            const existingLease = state.leases[profileSlug];
+            if (existingLease?.owner === profileFetchSchedulerState.tabId) {
+                delete state.leases[profileSlug];
+            }
+            return state;
+        });
+    }
+
     function isValidProfileStatusRecord(record, now) {
         return Boolean(record)
             && (record.action === "pending" || record.action === "connect")
@@ -914,6 +1486,86 @@
         }
 
         window.localStorage.setItem(PROFILE_STATUS_CACHE_KEY, JSON.stringify(payload));
+    }
+
+    async function readProfileFetchSchedulerState() {
+        if (chrome.storage?.local) {
+            const result = await new Promise((resolve, reject) => {
+                chrome.storage.local.get([PROFILE_FETCH_SCHEDULER_KEY], (value) => {
+                    const error = chrome.runtime?.lastError;
+                    if (error) {
+                        reject(new Error(error.message));
+                        return;
+                    }
+
+                    resolve(value || {});
+                });
+            });
+
+            return result[PROFILE_FETCH_SCHEDULER_KEY] && typeof result[PROFILE_FETCH_SCHEDULER_KEY] === "object"
+                ? result[PROFILE_FETCH_SCHEDULER_KEY]
+                : {};
+        }
+
+        try {
+            const rawValue = window.localStorage.getItem(PROFILE_FETCH_SCHEDULER_KEY);
+            if (!rawValue) {
+                return {};
+            }
+
+            const parsedValue = JSON.parse(rawValue);
+            return parsedValue && typeof parsedValue === "object" ? parsedValue : {};
+        } catch {
+            return {};
+        }
+    }
+
+    async function writeProfileFetchSchedulerState(payload) {
+        if (chrome.storage?.local) {
+            await new Promise((resolve, reject) => {
+                chrome.storage.local.set({ [PROFILE_FETCH_SCHEDULER_KEY]: payload }, () => {
+                    const error = chrome.runtime?.lastError;
+                    if (error) {
+                        reject(new Error(error.message));
+                        return;
+                    }
+
+                    resolve();
+                });
+            });
+            return;
+        }
+
+        window.localStorage.setItem(PROFILE_FETCH_SCHEDULER_KEY, JSON.stringify(payload));
+    }
+
+    async function readProfileFetchSettings() {
+        if (chrome.storage?.local) {
+            const result = await new Promise((resolve, reject) => {
+                chrome.storage.local.get([PROFILE_FETCH_SETTINGS_KEY], (value) => {
+                    const error = chrome.runtime?.lastError;
+                    if (error) {
+                        reject(new Error(error.message));
+                        return;
+                    }
+
+                    resolve(value || {});
+                });
+            });
+
+            return normalizeProfileFetchSettings(result[PROFILE_FETCH_SETTINGS_KEY]);
+        }
+
+        try {
+            const rawValue = window.localStorage.getItem(PROFILE_FETCH_SETTINGS_KEY);
+            if (!rawValue) {
+                return DEFAULT_PROFILE_FETCH_SETTINGS;
+            }
+
+            return normalizeProfileFetchSettings(JSON.parse(rawValue));
+        } catch {
+            return DEFAULT_PROFILE_FETCH_SETTINGS;
+        }
     }
 
     function getLinkedInCsrfToken() {

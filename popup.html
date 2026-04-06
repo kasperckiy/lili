@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LiLi Settings</title>
+    <link rel="stylesheet" href="popup.css">
+</head>
+
+<body>
+    <main class="popup-shell">
+        <header class="popup-header">
+            <p class="eyebrow">LiLi</p>
+            <h1>Profile Fetch Scheduler</h1>
+            <p class="subtitle">Tune how fallback LinkedIn profile checks are queued and throttled.</p>
+        </header>
+
+        <form id="settings-form" class="settings-form">
+            <label class="field">
+                <span>Concurrency</span>
+                <input id="concurrency" name="concurrency" type="number" min="1" step="1" inputmode="numeric"
+                    aria-describedby="concurrency-help">
+                <small id="concurrency-help" class="field-help">How many fallback profile fetches may run in parallel
+                    inside this tab.</small>
+            </label>
+
+            <label class="field">
+                <span>Base gap, ms</span>
+                <input id="baseGapMs" name="baseGapMs" type="number" min="0" step="100" inputmode="numeric"
+                    aria-describedby="base-gap-help">
+                <small id="base-gap-help" class="field-help">Minimum wait between starting two fallback fetch
+                    jobs.</small>
+            </label>
+
+            <div class="field-group">
+                <label class="field">
+                    <span>Jitter min, ms</span>
+                    <input id="jitterMinMs" name="jitterMinMs" type="number" min="0" step="100" inputmode="numeric"
+                        aria-describedby="jitter-min-help">
+                    <small id="jitter-min-help" class="field-help">Lower bound of the random delay added on top of the
+                        base gap.</small>
+                </label>
+
+                <label class="field">
+                    <span>Jitter max, ms</span>
+                    <input id="jitterMaxMs" name="jitterMaxMs" type="number" min="0" step="100" inputmode="numeric"
+                        aria-describedby="jitter-max-help">
+                    <small id="jitter-max-help" class="field-help">Upper bound of the random delay added before the next
+                        fetch starts.</small>
+                </label>
+            </div>
+
+            <label class="field">
+                <span>Scroll idle, ms</span>
+                <input id="scrollIdleMs" name="scrollIdleMs" type="number" min="0" step="100" inputmode="numeric"
+                    aria-describedby="scroll-idle-help">
+                <small id="scroll-idle-help" class="field-help">How long the page should stay still before low-priority
+                    fallback fetches may start.</small>
+            </label>
+
+            <div class="field-group">
+                <label class="field">
+                    <span>Rolling budget, fetches</span>
+                    <input id="rollingBudgetMax" name="rollingBudgetMax" type="number" min="1" step="1"
+                        inputmode="numeric" aria-describedby="rolling-budget-help">
+                    <small id="rolling-budget-help" class="field-help">Maximum number of fallback fetch starts allowed
+                        inside the rolling window.</small>
+                </label>
+
+                <label class="field">
+                    <span>Rolling window, minutes</span>
+                    <input id="rollingWindowMinutes" name="rollingWindowMinutes" type="number" min="1" step="1"
+                        inputmode="numeric" aria-describedby="rolling-window-help">
+                    <small id="rolling-window-help" class="field-help">Time window used when enforcing the rolling
+                        request budget.</small>
+                </label>
+            </div>
+
+            <label class="field">
+                <span>Backoff cap, minutes</span>
+                <input id="backoffCapMinutes" name="backoffCapMinutes" type="number" min="1" step="1"
+                    inputmode="numeric" aria-describedby="backoff-cap-help">
+                <small id="backoff-cap-help" class="field-help">Maximum cooldown after protection-like failures such as
+                    rate limits or challenge pages.</small>
+            </label>
+
+            <div class="actions">
+                <button id="save-button" type="submit" class="primary-action">Save</button>
+                <button id="reset-button" type="button" class="secondary-action">Reset defaults</button>
+            </div>
+        </form>
+
+        <p id="status" class="status" aria-live="polite"></p>
+    </main>
+
+    <script src="profile-fetch-settings.js"></script>
+    <script src="popup.js"></script>
+</body>
+
+</html>
