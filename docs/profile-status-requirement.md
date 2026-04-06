@@ -17,10 +17,10 @@ Show the correct relationship action for LinkedIn group members when the group m
 2. If a valid cached status exists, render it immediately.
 3. If there is no valid cache entry, render a loading action and start a background profile status request.
 4. Fallback profile status requests must run through a scheduler and must not start immediately when a card becomes visible.
-5. The scheduler must enforce a single fallback profile fetch at a time per tab, with a base gap of `3000` milliseconds plus jitter between `0` and `10000` milliseconds.
+5. The scheduler must use `2` independent fallback workers per tab by default, with a base gap of `3000` milliseconds plus jitter between `100` and `10000` milliseconds for each worker.
 6. The scheduler must coalesce repeated requests for the same profile slug and must avoid duplicate concurrent fallback fetches across open tabs when possible.
 7. The scheduler must wait for a short scroll-idle window before starting low-priority fallback profile fetches.
-8. The scheduler must enforce a rolling budget of `8` fallback profile fetch starts per `5` minutes and must pause new fallback fetches when the budget is exhausted.
+8. The scheduler must enforce a rolling budget of `15` fallback profile fetch starts per `2` minutes and must pause new fallback fetches when the budget is exhausted.
 9. The scheduler must apply cooldown/backoff after protection-like failures such as `429`, repeated `403`, challenge pages, timeouts, or unexpected profile documents, with a maximum cooldown of `10` minutes.
 10. After the profile response is parsed, render `Pending` when the profile document proves an existing invitation; otherwise render `Connect`.
 11. Cache both `Pending` and `Connect` results for `24` hours.

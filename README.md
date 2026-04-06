@@ -166,11 +166,11 @@ Upper limit for the shared cooldown after repeated protection-like failures such
 
 Safe starting point:
 
-- `Workers`: `1` or `2`
+- `Workers`: `2`
 - `Per-worker gap`: around `3000` ms
-- `Per-worker jitter`: something like `0-10000` ms
+- `Per-worker jitter`: something like `100-10000` ms
 - `Shared scroll idle`: around `1000` ms
-- `Shared rolling budget`: conservative enough that the queue drains gradually rather than in bursts
+- `Shared rolling budget`: around `15` starts per `2` minutes
 
 What to do if the queue feels too slow:
 
@@ -380,11 +380,11 @@ Fallback-запросы считаются низкоприоритетными.
 
 Безопасная стартовая точка:
 
-- `Workers`: `1` или `2`
+- `Workers`: `2`
 - `Per-worker gap`: около `3000` ms
-- `Per-worker jitter`: например `0-10000` ms
+- `Per-worker jitter`: например `100-10000` ms
 - `Shared scroll idle`: около `1000` ms
-- `Shared rolling budget`: достаточно консервативный, чтобы очередь разгружалась постепенно, а не рывком
+- `Shared rolling budget`: около `15` стартов за `2` минуты
 
 Если очередь кажется слишком медленной:
 

@@ -3,14 +3,14 @@
     const RUNTIME_STATS_STORAGE_KEY_PREFIX = "lili-profile-fetch-runtime-v1:";
     const RUNTIME_STATS_STALE_MS = 2 * 60 * 1000;
     const DEFAULT_PROFILE_FETCH_SETTINGS = Object.freeze({
-        workerCount: 1,
-        concurrency: 1,
+        workerCount: 2,
+        concurrency: 2,
         baseGapMs: 3000,
-        jitterMinMs: 0,
+        jitterMinMs: 100,
         jitterMaxMs: 10000,
         scrollIdleMs: 1000,
-        rollingBudgetMax: 8,
-        rollingWindowMs: 5 * 60 * 1000,
+        rollingBudgetMax: 15,
+        rollingWindowMs: 2 * 60 * 1000,
         backoffCapMs: 10 * 60 * 1000
     });
 

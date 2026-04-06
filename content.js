@@ -22,14 +22,14 @@
     const PROFILE_FETCH_SETTINGS_KEY = profileFetchSettingsApi?.SETTINGS_STORAGE_KEY || "lili-profile-fetch-settings-v1";
     const PROFILE_FETCH_RUNTIME_KEY_PREFIX = profileFetchSettingsApi?.RUNTIME_STATS_STORAGE_KEY_PREFIX || "lili-profile-fetch-runtime-v1:";
     const DEFAULT_PROFILE_FETCH_SETTINGS = profileFetchSettingsApi?.DEFAULT_PROFILE_FETCH_SETTINGS || {
-        workerCount: 1,
-        concurrency: 1,
+        workerCount: 2,
+        concurrency: 2,
         baseGapMs: 3000,
-        jitterMinMs: 0,
+        jitterMinMs: 100,
         jitterMaxMs: 10000,
         scrollIdleMs: 1000,
-        rollingBudgetMax: 8,
-        rollingWindowMs: 5 * 60 * 1000,
+        rollingBudgetMax: 15,
+        rollingWindowMs: 2 * 60 * 1000,
         backoffCapMs: 10 * 60 * 1000
     };
     const PROFILE_STATUS_CACHE_KEY = "lili-profile-status-cache-v2";
