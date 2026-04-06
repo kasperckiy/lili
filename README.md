@@ -26,6 +26,7 @@ This makes LinkedIn group member lists more useful for outreach and triage on pa
 - Avoids extra fetch requests to LinkedIn profile pages.
 - Uses the profile vanity slug already present in the group member card URL.
 - Listens to live LinkedIn page Voyager responses and applies a best-effort `Pending` state when relationship data is already present there.
+- Scans LinkedIn's embedded page JSON on first load, so `Pending` can appear immediately even when the relationship data was rendered into the initial HTML instead of arriving through a later XHR.
 - Processes cards lazily near the viewport instead of scanning the whole page at once.
 
 ## How it works
@@ -41,7 +42,7 @@ For each visible member card it:
 5. On click, opens LinkedIn's invite preload flow in a hidden same-origin iframe.
 6. Attempts to trigger `Send without a note` inside that hidden invite flow.
 7. Listens to LinkedIn's own `fetch` and `XHR` responses on the current page.
-8. Parses Voyager `included` entities to map `publicIdentifier` to `memberRelationship` data.
+8. Scans LinkedIn's embedded code-block JSON on first load and also parses later network responses.
 9. If LinkedIn exposes invitation metadata for the same profile slug, updates the button to `Pending`.
 
 ## Install locally

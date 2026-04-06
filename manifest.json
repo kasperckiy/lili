@@ -2,7 +2,7 @@
     "manifest_version": 3,
     "name": "LinkedIn Group Priority Actions",
     "short_name": "LiLi",
-    "version": "0.3.1",
+    "version": "0.3.2",
     "description": "Surfaces Connect or Pending on LinkedIn group member cards before falling back to Message.",
     "minimum_chrome_version": "114",
     "homepage_url": "https://github.com/kasperckiy/lili",

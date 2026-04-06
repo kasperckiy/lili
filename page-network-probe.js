@@ -11,6 +11,8 @@
     const originalOpen = XMLHttpRequest.prototype.open;
     const originalSend = XMLHttpRequest.prototype.send;
 
+    scanEmbeddedRelationshipHints();
+
     window.fetch = async function (...args) {
         const response = await originalFetch.apply(this, args);
         try {
@@ -89,6 +91,18 @@
         }
 
         window.dispatchEvent(new CustomEvent(eventName, { detail: hints }));
+    }
+
+    function scanEmbeddedRelationshipHints() {
+        const codeBlocks = document.querySelectorAll("code");
+        for (const codeBlock of codeBlocks) {
+            const text = codeBlock.textContent || "";
+            if (!/groupsDashGroupMembershipsByTypeahead|memberRelationship|invitation|withdraw/i.test(text)) {
+                continue;
+            }
+
+            emitHintsFromText(text, "embedded-page-data");
+        }
     }
 
     function collectRelationshipHints(payload, url) {
@@ -306,8 +320,8 @@
         const primaryAction = entity.profileStatefulProfileActions?.primaryActionResolutionResult;
         return hasNonNullValue(primaryAction?.withdraw)
             || hasNonNullValue(primaryAction?.["*withdraw"])
-            || hasNonNullValue(primaryAction?.invitation)
-            || hasNonNullValue(primaryAction?.["*invitation"]);
+            || hasActualInvitationValue(primaryAction?.invitation)
+            || hasActualInvitationValue(primaryAction?.["*invitation"]);
     }
 
     function hasPendingRelationship(entity) {
@@ -320,14 +334,33 @@
             return false;
         }
 
-        return hasNonNullValue(relationship.invitation)
-            || hasNonNullValue(relationship["*invitation"])
-            || hasNonNullValue(relationship.invitationUnion?.invitation)
-            || hasNonNullValue(relationship.invitationUnion?.["*invitation"])
-            || hasNonNullValue(relationship.noConnection?.invitation)
-            || hasNonNullValue(relationship.noConnection?.["*invitation"])
-            || hasNonNullValue(relationship.noConnection?.invitationUnion?.invitation)
-            || hasNonNullValue(relationship.noConnection?.invitationUnion?.["*invitation"]);
+        return hasActualInvitationValue(relationship.invitation)
+            || hasActualInvitationValue(relationship["*invitation"])
+            || hasActualInvitationValue(relationship.invitationUnion)
+            || hasActualInvitationValue(relationship.noConnection?.invitation)
+            || hasActualInvitationValue(relationship.noConnection?.["*invitation"])
+            || hasActualInvitationValue(relationship.noConnection?.invitationUnion);
+    }
+
+    function hasActualInvitationValue(value) {
+        if (typeof value === "string") {
+            return /invitation/i.test(value);
+        }
+
+        if (!value || typeof value !== "object") {
+            return false;
+        }
+
+        if (typeof value.invitationState === "string") {
+            return true;
+        }
+
+        if (typeof value.entityUrn === "string" && /invitation/i.test(value.entityUrn)) {
+            return true;
+        }
+
+        return hasActualInvitationValue(value.invitation)
+            || hasActualInvitationValue(value["*invitation"]);
     }
 
     function hasNonNullValue(value) {
