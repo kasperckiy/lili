@@ -53,12 +53,12 @@
     const profilePageSyncState = {
         timeoutId: 0,
         observer: null,
-        observedDocument: null
+        observedDocumentsKey: ""
     };
     const sentInvitationsSyncState = {
         timeoutId: 0,
         observer: null,
-        observedDocument: null
+        observedDocumentsKey: ""
     };
 
     const intersectionObserver = new IntersectionObserver(handleIntersections, {
@@ -112,11 +112,12 @@
             routeTimerId: 0,
             routeWatchIntervalId: 0,
             activePageDocument: null,
+            activePageDocumentsKey: "",
             groupMembersInitialized: false,
-            groupMembersObservedDocument: null,
+            groupMembersObservedDocumentsKey: "",
             profilePageSyncInitialized: false,
             sentInvitationsSyncInitialized: false,
-            networkHintTargetWindow: null
+            networkHintTargetWindows: []
         };
     }
 
@@ -132,7 +133,7 @@
 
         pageLifecycleState.routeWatchIntervalId = window.setInterval(() => {
             if (pageLifecycleState.lastUrl !== window.location.href
-                || pageLifecycleState.activePageDocument !== getActivePageDocument()) {
+                || pageLifecycleState.activePageDocumentsKey !== getActivePageDocumentsKey()) {
                 schedulePageModeRefresh();
             }
         }, ROUTE_WATCH_INTERVAL_MS);
@@ -168,11 +169,13 @@
     async function refreshPageMode() {
         const nextUrl = window.location.href;
         const nextMode = getPageMode();
-        const nextDocument = getActivePageDocument(nextMode);
+        const nextDocuments = getActivePageDocuments(nextMode);
+        const nextDocument = nextDocuments[0] || document;
+        const nextDocumentsKey = getPageDocumentsKey(nextDocuments);
         const previousMode = pageLifecycleState.currentMode;
         const didModeChange = previousMode !== nextMode;
         const didUrlChange = pageLifecycleState.lastUrl !== nextUrl;
-        const didDocumentChange = pageLifecycleState.activePageDocument !== nextDocument;
+        const didDocumentChange = pageLifecycleState.activePageDocumentsKey !== nextDocumentsKey;
 
         if (!didModeChange && !didUrlChange && !didDocumentChange) {
             return;
@@ -181,60 +184,107 @@
         pageLifecycleState.lastUrl = nextUrl;
         pageLifecycleState.currentMode = nextMode;
         pageLifecycleState.activePageDocument = nextDocument;
+        pageLifecycleState.activePageDocumentsKey = nextDocumentsKey;
+
+        if (previousMode === "profile-page" && nextMode !== "profile-page") {
+            profilePageSyncState.observer?.disconnect();
+            profilePageSyncState.observedDocumentsKey = "";
+            pageLifecycleState.profilePageSyncInitialized = false;
+        }
+
+        if (previousMode === "sent-invitations" && nextMode !== "sent-invitations") {
+            sentInvitationsSyncState.observer?.disconnect();
+            sentInvitationsSyncState.observedDocumentsKey = "";
+            pageLifecycleState.sentInvitationsSyncInitialized = false;
+        }
 
         if (previousMode === "group-members" && nextMode !== "group-members") {
             mutationObserver.disconnect();
-            pageLifecycleState.groupMembersObservedDocument = null;
-            setNetworkHintTargetWindow(null);
+            pageLifecycleState.groupMembersObservedDocumentsKey = "";
+            setNetworkHintTargetWindows([]);
             void clearProfileFetchRuntimeStats();
         }
 
         if (nextMode === "group-members") {
-            activateGroupMembersPage(nextDocument);
+            activateGroupMembersPage(nextDocuments);
             return;
         }
 
         if (nextMode === "profile-page") {
-            await initializeProfilePageSync(nextDocument);
+            await initializeProfilePageSync(nextDocuments);
             return;
         }
 
         if (nextMode === "sent-invitations") {
-            await initializeSentInvitationsSync(nextDocument);
+            await initializeSentInvitationsSync(nextDocuments);
         }
     }
 
-    function activateGroupMembersPage(targetDocument = getActivePageDocument("group-members")) {
+    function activateGroupMembersPage(targetDocuments = getActivePageDocuments("group-members")) {
         if (!pageLifecycleState.groupMembersInitialized) {
             pageLifecycleState.groupMembersInitialized = true;
             initializeProfileFetchScheduler();
         }
 
-        injectNetworkObserver(targetDocument);
-        setNetworkHintTargetWindow(getDocumentWindow(targetDocument));
+        const documentsKey = getPageDocumentsKey(targetDocuments);
+        targetDocuments.forEach((targetDocument) => {
+            injectNetworkObserver(targetDocument);
+        });
+        setNetworkHintTargetWindows(targetDocuments);
 
-        if (targetDocument?.body && pageLifecycleState.groupMembersObservedDocument !== targetDocument) {
+        if (documentsKey && pageLifecycleState.groupMembersObservedDocumentsKey !== documentsKey) {
             mutationObserver.disconnect();
-            mutationObserver.observe(targetDocument.body, { childList: true, subtree: true });
-            pageLifecycleState.groupMembersObservedDocument = targetDocument;
+            observeDocumentBodies(mutationObserver, targetDocuments);
+            pageLifecycleState.groupMembersObservedDocumentsKey = documentsKey;
         }
 
-        scanCards(targetDocument);
+        targetDocuments.forEach((targetDocument) => {
+            scanCards(targetDocument);
+        });
         scheduleProfileFetchQueueDrain();
         scheduleProfileFetchRuntimeStatsPublish();
     }
 
     function getActivePageDocument(mode = pageLifecycleState.currentMode) {
+        return getActivePageDocuments(mode)[0] || document;
+    }
+
+    function getActivePageDocuments(mode = pageLifecycleState.currentMode) {
         if (mode !== "group-members" && mode !== "profile-page" && mode !== "sent-invitations") {
-            return document;
+            return [document];
         }
+
+        const targetDocuments = [];
+        addUniquePageDocument(targetDocuments, document);
 
         const embeddedDocument = getEmbeddedPreloadDocument();
         if (documentMatchesPageMode(embeddedDocument, mode)) {
-            return embeddedDocument;
+            addUniquePageDocument(targetDocuments, embeddedDocument);
         }
 
-        return document;
+        return targetDocuments;
+    }
+
+    function addUniquePageDocument(targetDocuments, nextDocument) {
+        if (!nextDocument?.documentElement || targetDocuments.includes(nextDocument)) {
+            return;
+        }
+
+        targetDocuments.push(nextDocument);
+    }
+
+    function getActivePageDocumentsKey(mode = pageLifecycleState.currentMode) {
+        return getPageDocumentsKey(getActivePageDocuments(mode));
+    }
+
+    function getPageDocumentsKey(targetDocuments) {
+        return targetDocuments
+            .filter((targetDocument) => targetDocument?.documentElement)
+            .map((targetDocument) => {
+                const targetWindow = getDocumentWindow(targetDocument);
+                return `${getDocumentPathname(targetDocument)}::${targetWindow === window ? "top" : "embedded"}`;
+            })
+            .join("|");
     }
 
     function documentMatchesPageMode(targetDocument, mode) {
@@ -289,17 +339,32 @@
         return targetDocument?.defaultView || window;
     }
 
-    function setNetworkHintTargetWindow(targetWindow) {
-        const previousWindow = pageLifecycleState.networkHintTargetWindow;
-        if (previousWindow && previousWindow !== targetWindow) {
-            previousWindow.removeEventListener(NETWORK_HINT_EVENT, handleNetworkHints);
+    function setNetworkHintTargetWindows(targetDocuments) {
+        const nextWindows = targetDocuments
+            .map((targetDocument) => getDocumentWindow(targetDocument))
+            .filter((targetWindow, index, windows) => Boolean(targetWindow) && windows.indexOf(targetWindow) === index);
+
+        for (const previousWindow of pageLifecycleState.networkHintTargetWindows) {
+            if (!nextWindows.includes(previousWindow)) {
+                previousWindow.removeEventListener(NETWORK_HINT_EVENT, handleNetworkHints);
+            }
         }
 
-        if (targetWindow && previousWindow !== targetWindow) {
-            targetWindow.addEventListener(NETWORK_HINT_EVENT, handleNetworkHints);
+        for (const targetWindow of nextWindows) {
+            if (!pageLifecycleState.networkHintTargetWindows.includes(targetWindow)) {
+                targetWindow.addEventListener(NETWORK_HINT_EVENT, handleNetworkHints);
+            }
         }
 
-        pageLifecycleState.networkHintTargetWindow = targetWindow || null;
+        pageLifecycleState.networkHintTargetWindows = nextWindows;
+    }
+
+    function observeDocumentBodies(observer, targetDocuments) {
+        targetDocuments.forEach((targetDocument) => {
+            if (targetDocument?.body) {
+                observer.observe(targetDocument.body, { childList: true, subtree: true });
+            }
+        });
     }
 
     function getPageMode() {
@@ -320,9 +385,9 @@
         return "unsupported";
     }
 
-    async function initializeProfilePageSync(targetDocument = getActivePageDocument("profile-page")) {
+    async function initializeProfilePageSync(targetDocuments = getActivePageDocuments("profile-page")) {
         await profileStatusCacheReady;
-        await syncCurrentProfilePageCache(targetDocument);
+        await syncCurrentProfilePageCache(targetDocuments);
 
         if (!profilePageSyncState.observer) {
             profilePageSyncState.observer = new MutationObserver(() => {
@@ -330,36 +395,42 @@
             });
         }
 
-        if (pageLifecycleState.profilePageSyncInitialized && profilePageSyncState.observedDocument === targetDocument) {
+        const documentsKey = getPageDocumentsKey(targetDocuments);
+        if (pageLifecycleState.profilePageSyncInitialized && profilePageSyncState.observedDocumentsKey === documentsKey) {
             return;
         }
 
         pageLifecycleState.profilePageSyncInitialized = true;
         profilePageSyncState.observer.disconnect();
-        if (targetDocument?.body) {
-            profilePageSyncState.observer.observe(targetDocument.body, { childList: true, subtree: true });
-            profilePageSyncState.observedDocument = targetDocument;
-        }
+        observeDocumentBodies(profilePageSyncState.observer, targetDocuments);
+        profilePageSyncState.observedDocumentsKey = documentsKey;
     }
 
     function scheduleProfilePageSync() {
         window.clearTimeout(profilePageSyncState.timeoutId);
         profilePageSyncState.timeoutId = window.setTimeout(() => {
-            void syncCurrentProfilePageCache(getActivePageDocument("profile-page"));
+            void syncCurrentProfilePageCache(getActivePageDocuments("profile-page"));
         }, PROFILE_PAGE_SYNC_DEBOUNCE_MS);
     }
 
-    async function syncCurrentProfilePageCache(targetDocument = getActivePageDocument("profile-page")) {
+    async function syncCurrentProfilePageCache(targetDocuments = getActivePageDocuments("profile-page")) {
         const profileSlug = getProfileSlug(window.location.href);
         if (!profileSlug) {
             return;
         }
 
-        const htmlDocument = targetDocument?.documentElement?.outerHTML || document.documentElement.outerHTML;
-        const profileRecord = getProfileDocumentRecord(htmlDocument);
-        const didChange = profileRecord.action === "pending"
-            ? applyPendingStatus(profileSlug, "profile-page", profileRecord.profileUrn)
-            : applyConnectStatus(profileSlug, "profile-page", profileRecord.profileUrn);
+        let didChange = false;
+        for (const targetDocument of targetDocuments) {
+            if (!documentMatchesPageMode(targetDocument, "profile-page")) {
+                continue;
+            }
+
+            const htmlDocument = targetDocument?.documentElement?.outerHTML || document.documentElement.outerHTML;
+            const profileRecord = getProfileDocumentRecord(htmlDocument);
+            didChange = profileRecord.action === "pending"
+                ? applyPendingStatus(profileSlug, "profile-page", profileRecord.profileUrn) || didChange
+                : applyConnectStatus(profileSlug, "profile-page", profileRecord.profileUrn) || didChange;
+        }
 
         if (!didChange) {
             return;
@@ -369,9 +440,9 @@
         rerenderAllCards();
     }
 
-    async function initializeSentInvitationsSync(targetDocument = getActivePageDocument("sent-invitations")) {
+    async function initializeSentInvitationsSync(targetDocuments = getActivePageDocuments("sent-invitations")) {
         await profileStatusCacheReady;
-        await syncSentInvitationsCache(targetDocument);
+        await syncSentInvitationsCache(targetDocuments);
 
         if (!sentInvitationsSyncState.observer) {
             sentInvitationsSyncState.observer = new MutationObserver(() => {
@@ -379,22 +450,21 @@
             });
         }
 
-        if (pageLifecycleState.sentInvitationsSyncInitialized && sentInvitationsSyncState.observedDocument === targetDocument) {
+        const documentsKey = getPageDocumentsKey(targetDocuments);
+        if (pageLifecycleState.sentInvitationsSyncInitialized && sentInvitationsSyncState.observedDocumentsKey === documentsKey) {
             return;
         }
 
         pageLifecycleState.sentInvitationsSyncInitialized = true;
         sentInvitationsSyncState.observer.disconnect();
-        if (targetDocument?.body) {
-            sentInvitationsSyncState.observer.observe(targetDocument.body, { childList: true, subtree: true });
-            sentInvitationsSyncState.observedDocument = targetDocument;
-        }
+        observeDocumentBodies(sentInvitationsSyncState.observer, targetDocuments);
+        sentInvitationsSyncState.observedDocumentsKey = documentsKey;
     }
 
     function scheduleSentInvitationsSync() {
         window.clearTimeout(sentInvitationsSyncState.timeoutId);
         sentInvitationsSyncState.timeoutId = window.setTimeout(() => {
-            void syncSentInvitationsCache(getActivePageDocument("sent-invitations"));
+            void syncSentInvitationsCache(getActivePageDocuments("sent-invitations"));
         }, SENT_INVITATIONS_SYNC_DEBOUNCE_MS);
     }
 
@@ -690,8 +760,8 @@
         }, normalizedDelayMs);
     }
 
-    async function syncSentInvitationsCache(root) {
-        const profileSlugs = collectSentInvitationProfileSlugs(root);
+    async function syncSentInvitationsCache(targetDocuments = getActivePageDocuments("sent-invitations")) {
+        const profileSlugs = collectSentInvitationProfileSlugs(targetDocuments);
         if (profileSlugs.size === 0) {
             return;
         }
@@ -709,14 +779,20 @@
         rerenderAllCards();
     }
 
-    function collectSentInvitationProfileSlugs(root) {
+    function collectSentInvitationProfileSlugs(targetDocuments) {
         const profileSlugs = new Set();
-        root.querySelectorAll(SENT_INVITATION_PROFILE_LINK_SELECTOR).forEach((link) => {
-            const href = link.getAttribute("href") || "";
-            const profileSlug = getProfileSlug(normalizeLinkedInUrl(href));
-            if (profileSlug) {
-                profileSlugs.add(profileSlug);
+        targetDocuments.forEach((targetDocument) => {
+            if (!documentMatchesPageMode(targetDocument, "sent-invitations")) {
+                return;
             }
+
+            targetDocument.querySelectorAll(SENT_INVITATION_PROFILE_LINK_SELECTOR).forEach((link) => {
+                const href = link.getAttribute("href") || "";
+                const profileSlug = getProfileSlug(normalizeLinkedInUrl(href));
+                if (profileSlug) {
+                    profileSlugs.add(profileSlug);
+                }
+            });
         });
         return profileSlugs;
     }
