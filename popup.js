@@ -45,7 +45,7 @@
         failureServer: document.getElementById("runtime-failure-server"),
         failureParse: document.getElementById("runtime-failure-parse"),
         failureOther: document.getElementById("runtime-failure-other"),
-        settingConcurrency: document.getElementById("runtime-setting-concurrency"),
+        settingWorkerCount: document.getElementById("runtime-setting-worker-count"),
         settingBaseGap: document.getElementById("runtime-setting-base-gap"),
         settingJitter: document.getElementById("runtime-setting-jitter"),
         settingScrollIdle: document.getElementById("runtime-setting-scroll-idle"),
@@ -57,7 +57,7 @@
     let runtimeTickerId = 0;
 
     const fields = {
-        concurrency: document.getElementById("concurrency"),
+        workerCount: document.getElementById("workerCount"),
         baseGapMs: document.getElementById("baseGapMs"),
         jitterMinMs: document.getElementById("jitterMinMs"),
         jitterMaxMs: document.getElementById("jitterMaxMs"),
@@ -243,8 +243,8 @@
 
         if (runtimeNodes.meta) {
             runtimeNodes.meta.textContent = snapshot.tabCount > 0
-            ? `Reporting tabs: ${snapshot.tabCount}. Queue is aggregated across active LinkedIn group pages; cache is shared across supported LinkedIn pages.`
-            : "Open a LinkedIn group members tab to see live queue stats. Cache count is shared across supported LinkedIn pages.";
+                ? `Reporting tabs: ${snapshot.tabCount}. Queue is aggregated across active LinkedIn group pages; cache is shared across supported LinkedIn pages.`
+                : "Open a LinkedIn group members tab to see live queue stats. Cache count is shared across supported LinkedIn pages.";
         }
 
         if (runtimeNodes.updated) {
@@ -273,7 +273,7 @@
         setRuntimeValue(runtimeNodes.idleWait, formatDuration(idleWaitMs));
         setRuntimeValue(runtimeNodes.budgetWait, formatDuration(budgetWaitMs));
         setRuntimeValue(runtimeNodes.nextDrain, tab?.scheduledDrainAt ? formatDuration(nextDrainMs) : "not scheduled");
-        setRuntimeValue(runtimeNodes.schedulerJobs, `${Number(tab?.schedulerActiveCount || 0)} / ${Number(tab?.concurrency || 0)}`);
+        setRuntimeValue(runtimeNodes.schedulerJobs, `${Number(tab?.schedulerActiveCount || 0)} / ${getConfiguredWorkerCount(tab)}`);
         setRuntimeValue(runtimeNodes.oldestQueued, tab?.oldestQueuedAt ? formatDuration(oldestQueuedMs) : "none");
         setRuntimeValue(runtimeNodes.recentStarts, `${Number(tab?.recentFetchStartsCount || 0)} / ${Number(tab?.rollingBudgetMax || 0)}`);
         setRuntimeValue(runtimeNodes.failureCount, Number(tab?.failureCount || 0));
@@ -288,7 +288,7 @@
         setRuntimeValue(runtimeNodes.failureServer, Number(tab?.failureCounts?.server || 0));
         setRuntimeValue(runtimeNodes.failureParse, Number(tab?.failureCounts?.parse || 0));
         setRuntimeValue(runtimeNodes.failureOther, Number(tab?.failureCounts?.other || 0));
-        setRuntimeValue(runtimeNodes.settingConcurrency, Number(tab?.concurrency || 0));
+        setRuntimeValue(runtimeNodes.settingWorkerCount, getConfiguredWorkerCount(tab));
         setRuntimeValue(runtimeNodes.settingBaseGap, formatDuration(Number(tab?.baseGapMs || 0)));
         setRuntimeValue(runtimeNodes.settingJitter, `${formatDuration(Number(tab?.jitterMinMs || 0))}-${formatDuration(Number(tab?.jitterMaxMs || 0))}`);
         setRuntimeValue(runtimeNodes.settingScrollIdle, formatDuration(Number(tab?.scrollIdleMs || 0)));
@@ -364,8 +364,9 @@
             return "idle";
         }
 
-        if (Number(tab.schedulerActiveCount || 0) >= Number(tab.concurrency || 0) && Number(tab.concurrency || 0) > 0) {
-            return "concurrency";
+        const workerCount = getConfiguredWorkerCount(tab);
+        if (Number(tab.schedulerActiveCount || 0) >= workerCount && workerCount > 0) {
+            return "workers";
         }
 
         const waitEntries = [
@@ -437,7 +438,7 @@
 
     function readSettingsFromForm() {
         return {
-            concurrency: fields.concurrency?.value,
+            workerCount: fields.workerCount?.value,
             baseGapMs: fields.baseGapMs?.value,
             jitterMinMs: fields.jitterMinMs?.value,
             jitterMaxMs: fields.jitterMaxMs?.value,
@@ -450,7 +451,7 @@
 
     function applySettingsToForm(settings) {
         const normalizedSettings = normalizeProfileFetchSettings(settings);
-        setFieldValue(fields.concurrency, normalizedSettings.concurrency);
+        setFieldValue(fields.workerCount, normalizedSettings.workerCount || normalizedSettings.concurrency);
         setFieldValue(fields.baseGapMs, normalizedSettings.baseGapMs);
         setFieldValue(fields.jitterMinMs, normalizedSettings.jitterMinMs);
         setFieldValue(fields.jitterMaxMs, normalizedSettings.jitterMaxMs);
@@ -464,6 +465,11 @@
         if (field instanceof HTMLInputElement) {
             field.value = String(value);
         }
+    }
+
+    function getConfiguredWorkerCount(tab) {
+        const workerCount = Number(tab?.workerCount || tab?.concurrency || 0);
+        return Number.isFinite(workerCount) && workerCount > 0 ? workerCount : 0;
     }
 
     function setStatus(message) {

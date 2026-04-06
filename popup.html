@@ -60,7 +60,7 @@
                     <div class="runtime-debug-list">
                         <div class="runtime-debug-row"><span>Queue gate</span><strong
                                 id="runtime-wait-gate">none</strong></div>
-                        <div class="runtime-debug-row"><span>Gap remaining</span><strong
+                        <div class="runtime-debug-row"><span>Earliest worker gap</span><strong
                                 id="runtime-gap-wait">0s</strong></div>
                         <div class="runtime-debug-row"><span>Cooldown remaining</span><strong
                                 id="runtime-cooldown-wait">0s</strong></div>
@@ -76,7 +76,7 @@
                 <div class="runtime-debug-card">
                     <p class="runtime-debug-title">Scheduler State</p>
                     <div class="runtime-debug-list">
-                        <div class="runtime-debug-row"><span>Scheduler jobs</span><strong id="runtime-scheduler-jobs">0
+                        <div class="runtime-debug-row"><span>Busy workers</span><strong id="runtime-scheduler-jobs">0
                                 / 0</strong></div>
                         <div class="runtime-debug-row"><span>Oldest queued</span><strong
                                 id="runtime-oldest-queued">0s</strong></div>
@@ -118,17 +118,17 @@
                 <div class="runtime-debug-card runtime-debug-card--full">
                     <p class="runtime-debug-title">Effective Settings</p>
                     <div class="runtime-debug-list runtime-debug-list--three">
-                        <div class="runtime-debug-row"><span>Concurrency</span><strong
-                                id="runtime-setting-concurrency">0</strong></div>
-                        <div class="runtime-debug-row"><span>Base gap</span><strong
+                        <div class="runtime-debug-row"><span>Workers</span><strong
+                                id="runtime-setting-worker-count">0</strong></div>
+                        <div class="runtime-debug-row"><span>Per-worker gap</span><strong
                                 id="runtime-setting-base-gap">0s</strong></div>
-                        <div class="runtime-debug-row"><span>Jitter</span><strong
+                        <div class="runtime-debug-row"><span>Per-worker jitter</span><strong
                                 id="runtime-setting-jitter">0s-0s</strong></div>
-                        <div class="runtime-debug-row"><span>Scroll idle</span><strong
+                        <div class="runtime-debug-row"><span>Shared scroll idle</span><strong
                                 id="runtime-setting-scroll-idle">0s</strong></div>
-                        <div class="runtime-debug-row"><span>Rolling budget</span><strong id="runtime-setting-budget">0
+                        <div class="runtime-debug-row"><span>Shared rolling budget</span><strong id="runtime-setting-budget">0
                                 / 0</strong></div>
-                        <div class="runtime-debug-row"><span>Backoff cap</span><strong
+                        <div class="runtime-debug-row"><span>Shared backoff cap</span><strong
                                 id="runtime-setting-backoff-cap">0s</strong></div>
                     </div>
                 </div>
@@ -137,54 +137,54 @@
 
         <form id="settings-form" class="settings-form">
             <label class="field">
-                <span>Concurrency</span>
-                <input id="concurrency" name="concurrency" type="number" min="1" step="1" inputmode="numeric"
-                    aria-describedby="concurrency-help">
-                <small id="concurrency-help" class="field-help">How many fallback profile fetches may run in parallel
-                    inside this tab.</small>
+                <span>Workers</span>
+                <input id="workerCount" name="workerCount" type="number" min="1" step="1" inputmode="numeric"
+                    aria-describedby="worker-count-help">
+                <small id="worker-count-help" class="field-help">How many independent fallback fetch workers may pull
+                    from the shared queue inside this tab.</small>
             </label>
 
             <label class="field">
-                <span>Base gap, ms</span>
+                <span>Per-worker gap, ms</span>
                 <input id="baseGapMs" name="baseGapMs" type="number" min="0" step="100" inputmode="numeric"
                     aria-describedby="base-gap-help">
-                <small id="base-gap-help" class="field-help">Minimum wait between starting two fallback fetch
-                    jobs.</small>
+                <small id="base-gap-help" class="field-help">Minimum wait before the same worker may start its next
+                    fallback fetch.</small>
             </label>
 
             <div class="field-group">
                 <label class="field">
-                    <span>Jitter min, ms</span>
+                    <span>Per-worker jitter min, ms</span>
                     <input id="jitterMinMs" name="jitterMinMs" type="number" min="0" step="100" inputmode="numeric"
                         aria-describedby="jitter-min-help">
-                    <small id="jitter-min-help" class="field-help">Lower bound of the random delay added on top of the
-                        base gap.</small>
+                    <small id="jitter-min-help" class="field-help">Lower bound of the random delay added to one
+                        worker before it may start again.</small>
                 </label>
 
                 <label class="field">
-                    <span>Jitter max, ms</span>
+                    <span>Per-worker jitter max, ms</span>
                     <input id="jitterMaxMs" name="jitterMaxMs" type="number" min="0" step="100" inputmode="numeric"
                         aria-describedby="jitter-max-help">
-                    <small id="jitter-max-help" class="field-help">Upper bound of the random delay added before the next
-                        fetch starts.</small>
+                    <small id="jitter-max-help" class="field-help">Upper bound of the random delay added before that
+                        worker may start the next fetch.</small>
                 </label>
             </div>
 
             <label class="field">
-                <span>Scroll idle, ms</span>
+                <span>Shared scroll idle, ms</span>
                 <input id="scrollIdleMs" name="scrollIdleMs" type="number" min="0" step="100" inputmode="numeric"
                     aria-describedby="scroll-idle-help">
                 <small id="scroll-idle-help" class="field-help">How long the page should stay still before low-priority
-                    fallback fetches may start.</small>
+                    fallback fetches may start across the shared queue.</small>
             </label>
 
             <div class="field-group">
                 <label class="field">
-                    <span>Rolling budget, fetches</span>
+                    <span>Shared rolling budget, fetches</span>
                     <input id="rollingBudgetMax" name="rollingBudgetMax" type="number" min="1" step="1"
                         inputmode="numeric" aria-describedby="rolling-budget-help">
                     <small id="rolling-budget-help" class="field-help">Maximum number of fallback fetch starts allowed
-                        inside the rolling window.</small>
+                        across all workers inside the rolling window.</small>
                 </label>
 
                 <label class="field">
@@ -197,11 +197,11 @@
             </div>
 
             <label class="field">
-                <span>Backoff cap, minutes</span>
+                <span>Shared backoff cap, minutes</span>
                 <input id="backoffCapMinutes" name="backoffCapMinutes" type="number" min="1" step="1"
                     inputmode="numeric" aria-describedby="backoff-cap-help">
                 <small id="backoff-cap-help" class="field-help">Maximum cooldown after protection-like failures such as
-                    rate limits or challenge pages.</small>
+                    rate limits or challenge pages across the shared scheduler.</small>
             </label>
 
             <div class="actions">

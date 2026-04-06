@@ -3,6 +3,7 @@
     const RUNTIME_STATS_STORAGE_KEY_PREFIX = "lili-profile-fetch-runtime-v1:";
     const RUNTIME_STATS_STALE_MS = 2 * 60 * 1000;
     const DEFAULT_PROFILE_FETCH_SETTINGS = Object.freeze({
+        workerCount: 1,
         concurrency: 1,
         baseGapMs: 3000,
         jitterMinMs: 0,
@@ -23,7 +24,13 @@
             ? rawValue
             : DEFAULT_PROFILE_FETCH_SETTINGS;
 
-        const concurrency = Math.max(1, toInteger(candidate.concurrency, DEFAULT_PROFILE_FETCH_SETTINGS.concurrency));
+        const workerCount = Math.max(
+            1,
+            toInteger(
+                candidate.workerCount,
+                toInteger(candidate.concurrency, DEFAULT_PROFILE_FETCH_SETTINGS.workerCount)
+            )
+        );
         const baseGapMs = Math.max(0, toInteger(candidate.baseGapMs, DEFAULT_PROFILE_FETCH_SETTINGS.baseGapMs));
         const jitterMinMs = Math.max(0, toInteger(candidate.jitterMinMs, DEFAULT_PROFILE_FETCH_SETTINGS.jitterMinMs));
         const jitterMaxMs = Math.max(jitterMinMs, toInteger(candidate.jitterMaxMs, DEFAULT_PROFILE_FETCH_SETTINGS.jitterMaxMs));
@@ -33,7 +40,8 @@
         const backoffCapMs = Math.max(1000, toInteger(candidate.backoffCapMs, DEFAULT_PROFILE_FETCH_SETTINGS.backoffCapMs));
 
         return {
-            concurrency,
+            workerCount,
+            concurrency: workerCount,
             baseGapMs,
             jitterMinMs,
             jitterMaxMs,

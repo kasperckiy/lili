@@ -31,7 +31,7 @@ Show the correct relationship action for LinkedIn group members when the group m
 16. If the user opens a concrete profile page at `https://www.linkedin.com/in/{slug}/`, overwrite the cache with the explicit `Connect` or `Pending` state from that already loaded profile page.
 17. Cache overwrites from concrete profile pages and from the sent invitations page must propagate to other open extension tabs through shared storage updates.
 18. The generated `Connect` action must call LinkedIn's invitation API directly and must not depend on a hidden invite iframe.
-19. The extension popup must expose editable scheduler settings for concurrency, base gap, jitter range, scroll idle, rolling budget, rolling window, and backoff cap.
+19. The extension popup must expose editable scheduler settings for worker count, per-worker base gap, per-worker jitter range, shared scroll idle, shared rolling budget, rolling window, and shared backoff cap.
 20. Popup changes must persist in extension storage and be observable by already open LinkedIn tabs.
 
 ## UX notes

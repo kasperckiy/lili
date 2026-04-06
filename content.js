@@ -22,6 +22,7 @@
     const PROFILE_FETCH_SETTINGS_KEY = profileFetchSettingsApi?.SETTINGS_STORAGE_KEY || "lili-profile-fetch-settings-v1";
     const PROFILE_FETCH_RUNTIME_KEY_PREFIX = profileFetchSettingsApi?.RUNTIME_STATS_STORAGE_KEY_PREFIX || "lili-profile-fetch-runtime-v1:";
     const DEFAULT_PROFILE_FETCH_SETTINGS = profileFetchSettingsApi?.DEFAULT_PROFILE_FETCH_SETTINGS || {
+        workerCount: 1,
         concurrency: 1,
         baseGapMs: 3000,
         jitterMinMs: 0,
@@ -379,7 +380,7 @@
             tabId: createTabInstanceId(),
             queue: [],
             jobsBySlug: new Map(),
-            activeCount: 0,
+            workers: createProfileFetchWorkers(profileFetchSettingsState.values.workerCount),
             activeRequestCount: 0,
             successfulCheckCount: 0,
             lastSuccessfulCheckAt: 0,
@@ -392,11 +393,57 @@
             draining: false,
             runtimeStatsTimerId: 0,
             lastScrollAt: Date.now(),
-            nextAllowedStartAt: 0,
             failureCount: 0,
             storageMutationPromise: Promise.resolve(),
             syncedState: createEmptyProfileFetchSchedulerStorageState()
         };
+    }
+
+    function createProfileFetchWorkers(workerCount) {
+        const normalizedWorkerCount = Math.max(1, Number(workerCount) || 1);
+        const workers = [];
+
+        for (let index = 0; index < normalizedWorkerCount; index += 1) {
+            workers.push(createProfileFetchWorker(index));
+        }
+
+        return workers;
+    }
+
+    function createProfileFetchWorker(index, existingWorker) {
+        return {
+            id: existingWorker?.id || `worker-${index + 1}`,
+            status: existingWorker?.status === "active" ? "active" : "idle",
+            activeProfileSlug: typeof existingWorker?.activeProfileSlug === "string"
+                ? existingWorker.activeProfileSlug
+                : "",
+            nextAllowedStartAt: Number.isFinite(existingWorker?.nextAllowedStartAt)
+                ? existingWorker.nextAllowedStartAt
+                : 0
+        };
+    }
+
+    function reconcileProfileFetchWorkers() {
+        const targetWorkerCount = profileFetchSettingsState.values.workerCount;
+
+        while (profileFetchSchedulerState.workers.length < targetWorkerCount) {
+            profileFetchSchedulerState.workers.push(createProfileFetchWorker(profileFetchSchedulerState.workers.length));
+        }
+
+        trimIdleProfileFetchWorkers();
+    }
+
+    function trimIdleProfileFetchWorkers() {
+        const targetWorkerCount = profileFetchSettingsState.values.workerCount;
+
+        while (profileFetchSchedulerState.workers.length > targetWorkerCount) {
+            const tailWorker = profileFetchSchedulerState.workers[profileFetchSchedulerState.workers.length - 1];
+            if (tailWorker?.status === "active") {
+                break;
+            }
+
+            profileFetchSchedulerState.workers.pop();
+        }
     }
 
     function createEmptyProfileFetchSchedulerStorageState() {
@@ -474,13 +521,15 @@
     function getProfileFetchRuntimeSnapshot() {
         const now = Date.now();
         const queuedCount = getQueuedProfileFetchCount();
-        const gapWaitMs = Math.max(0, profileFetchSchedulerState.nextAllowedStartAt - now);
+        const gapWaitMs = getNextProfileFetchWorkerWaitMs(now);
         const cooldownWaitMs = Math.max(0, (profileFetchSchedulerState.syncedState.cooldownUntil || 0) - now);
         const idleWaitMs = Math.max(0, profileFetchSettingsState.values.scrollIdleMs - (now - profileFetchSchedulerState.lastScrollAt));
         const budgetWaitMs = getProfileFetchBudgetWaitMs(now);
         const budgetBlockedUntil = budgetWaitMs > 0
             ? (profileFetchSchedulerState.syncedState.recentFetchStarts[0] + profileFetchSettingsState.values.rollingWindowMs)
             : 0;
+        const nextAllowedStartAt = gapWaitMs > 0 ? now + gapWaitMs : 0;
+        const activeWorkerCount = getActiveProfileFetchWorkerCount();
 
         return {
             tabId: profileFetchSchedulerState.tabId,
@@ -494,8 +543,9 @@
             lastFailureCode: profileFetchSchedulerState.lastFailureCode,
             lastFailureAt: profileFetchSchedulerState.lastFailureAt || 0,
             failureCounts: { ...profileFetchSchedulerState.failureCounts },
-            schedulerActiveCount: profileFetchSchedulerState.activeCount,
-            concurrency: profileFetchSettingsState.values.concurrency,
+            schedulerActiveCount: activeWorkerCount,
+            workerCount: profileFetchSettingsState.values.workerCount,
+            concurrency: profileFetchSettingsState.values.workerCount,
             draining: profileFetchSchedulerState.draining,
             failureCount: profileFetchSchedulerState.failureCount,
             leaseCount: Object.keys(profileFetchSchedulerState.syncedState.leases || {}).length,
@@ -507,7 +557,7 @@
             jitterMinMs: profileFetchSettingsState.values.jitterMinMs,
             jitterMaxMs: profileFetchSettingsState.values.jitterMaxMs,
             scrollIdleMs: profileFetchSettingsState.values.scrollIdleMs,
-            nextAllowedStartAt: profileFetchSchedulerState.nextAllowedStartAt,
+            nextAllowedStartAt,
             cooldownUntil: profileFetchSchedulerState.syncedState.cooldownUntil || 0,
             lastScrollAt: profileFetchSchedulerState.lastScrollAt,
             idleUntil: profileFetchSchedulerState.lastScrollAt + profileFetchSettingsState.values.scrollIdleMs,
@@ -519,8 +569,26 @@
             budgetWaitMs,
             totalWaitMs: Math.max(gapWaitMs, cooldownWaitMs, idleWaitMs, budgetWaitMs),
             oldestQueuedAt: getOldestQueuedAt(),
+            workers: profileFetchSchedulerState.workers.map((worker) => ({
+                id: worker.id,
+                status: worker.status,
+                activeProfileSlug: worker.activeProfileSlug,
+                nextAllowedStartAt: worker.nextAllowedStartAt
+            })),
             updatedAt: now
         };
+    }
+
+    function getActiveProfileFetchWorkerCount() {
+        let activeWorkerCount = 0;
+
+        for (const worker of profileFetchSchedulerState.workers) {
+            if (worker?.status === "active") {
+                activeWorkerCount += 1;
+            }
+        }
+
+        return activeWorkerCount;
     }
 
     function getQueuedProfileFetchCount() {
@@ -1007,44 +1075,51 @@
         profileFetchSchedulerState.draining = true;
 
         try {
-            if (profileFetchSchedulerState.activeCount >= profileFetchSettingsState.values.concurrency) {
-                return;
-            }
+            while (true) {
+                const nextQueuedJob = getNextQueuedProfileJob();
+                if (!nextQueuedJob) {
+                    return;
+                }
 
-            const nextQueuedJob = getNextQueuedProfileJob();
-            if (!nextQueuedJob) {
-                return;
-            }
+                const { profileSlug, queueIndex } = nextQueuedJob;
 
-            const { profileSlug, queueIndex } = nextQueuedJob;
+                if (shouldSkipQueuedProfileFetch(profileSlug)) {
+                    profileFetchSchedulerState.queue.splice(queueIndex, 1);
+                    profileFetchSchedulerState.jobsBySlug.delete(profileSlug);
+                    profileProbeStateBySlug.delete(profileSlug);
+                    rerenderCards(profileSlug);
+                    scheduleProfileFetchRuntimeStatsPublish();
+                    continue;
+                }
 
-            if (shouldSkipQueuedProfileFetch(profileSlug)) {
+                const sharedWaitMs = getNextProfileFetchSharedWaitMs();
+                if (sharedWaitMs > 0) {
+                    scheduleProfileFetchQueueDrain(sharedWaitMs);
+                    return;
+                }
+
+                const worker = getNextReadyProfileFetchWorker();
+                if (!worker) {
+                    const workerWaitMs = getNextProfileFetchWorkerWaitMs();
+                    if (workerWaitMs > 0) {
+                        scheduleProfileFetchQueueDrain(workerWaitMs);
+                    }
+                    return;
+                }
+
+                const job = profileFetchSchedulerState.jobsBySlug.get(profileSlug);
+                if (!job) {
+                    continue;
+                }
+
                 profileFetchSchedulerState.queue.splice(queueIndex, 1);
-                profileFetchSchedulerState.jobsBySlug.delete(profileSlug);
-                profileProbeStateBySlug.delete(profileSlug);
-                rerenderCards(profileSlug);
+                job.status = "active";
+                job.workerId = worker.id;
+                worker.status = "active";
+                worker.activeProfileSlug = profileSlug;
                 scheduleProfileFetchRuntimeStatsPublish();
-                scheduleProfileFetchQueueDrain();
-                return;
+                void runProfileFetchJob(worker.id, profileSlug);
             }
-
-            const waitMs = getNextProfileFetchWaitMs();
-            if (waitMs > 0) {
-                scheduleProfileFetchQueueDrain(waitMs);
-                return;
-            }
-
-            const job = profileFetchSchedulerState.jobsBySlug.get(profileSlug);
-            if (!job) {
-                scheduleProfileFetchQueueDrain();
-                return;
-            }
-
-            profileFetchSchedulerState.queue.splice(queueIndex, 1);
-            job.status = "active";
-            profileFetchSchedulerState.activeCount += 1;
-            scheduleProfileFetchRuntimeStatsPublish();
-            void runProfileFetchJob(profileSlug);
         } finally {
             profileFetchSchedulerState.draining = false;
         }
@@ -1080,14 +1155,50 @@
             || inviteStateBySlug.get(profileSlug)?.action === "sending");
     }
 
-    function getNextProfileFetchWaitMs() {
+    function getNextProfileFetchSharedWaitMs() {
         const now = Date.now();
-        const gapWaitMs = Math.max(0, profileFetchSchedulerState.nextAllowedStartAt - now);
         const cooldownWaitMs = Math.max(0, (profileFetchSchedulerState.syncedState.cooldownUntil || 0) - now);
         const idleWaitMs = Math.max(0, profileFetchSettingsState.values.scrollIdleMs - (now - profileFetchSchedulerState.lastScrollAt));
         const budgetWaitMs = getProfileFetchBudgetWaitMs(now);
 
-        return Math.max(gapWaitMs, cooldownWaitMs, idleWaitMs, budgetWaitMs);
+        return Math.max(cooldownWaitMs, idleWaitMs, budgetWaitMs);
+    }
+
+    function getNextReadyProfileFetchWorker(now = Date.now()) {
+        for (let index = 0; index < profileFetchSettingsState.values.workerCount; index += 1) {
+            const worker = profileFetchSchedulerState.workers[index];
+            if (!worker || worker.status !== "idle") {
+                continue;
+            }
+
+            if (Math.max(0, worker.nextAllowedStartAt - now) > 0) {
+                continue;
+            }
+
+            return worker;
+        }
+
+        return null;
+    }
+
+    function getNextProfileFetchWorkerWaitMs(now = Date.now()) {
+        let minWaitMs = 0;
+
+        for (let index = 0; index < profileFetchSettingsState.values.workerCount; index += 1) {
+            const worker = profileFetchSchedulerState.workers[index];
+            if (!worker || worker.status !== "idle") {
+                continue;
+            }
+
+            const waitMs = Math.max(0, worker.nextAllowedStartAt - now);
+            if (waitMs <= 0) {
+                return 0;
+            }
+
+            minWaitMs = minWaitMs === 0 ? waitMs : Math.min(minWaitMs, waitMs);
+        }
+
+        return minWaitMs;
     }
 
     function getProfileFetchBudgetWaitMs(now) {
@@ -1100,10 +1211,11 @@
         return Math.max(0, earliestAllowedAt - now);
     }
 
-    async function runProfileFetchJob(profileSlug) {
+    async function runProfileFetchJob(workerId, profileSlug) {
         let preserveJob = false;
         let retryDelayMs = 0;
         let leaseAcquired = false;
+        const worker = getProfileFetchWorkerById(workerId);
 
         try {
             const leaseResult = await tryAcquireProfileFetchLease(profileSlug);
@@ -1116,9 +1228,11 @@
 
             leaseAcquired = true;
             const startedAt = Date.now();
-            profileFetchSchedulerState.nextAllowedStartAt = startedAt
-                + profileFetchSettingsState.values.baseGapMs
-                + getRandomProfileFetchJitterMs();
+            if (worker) {
+                worker.nextAllowedStartAt = startedAt
+                    + profileFetchSettingsState.values.baseGapMs
+                    + getRandomProfileFetchJitterMs();
+            }
             await registerProfileFetchStart(startedAt);
             await resolveProfileStatus(profileSlug);
             profileFetchSchedulerState.failureCount = 0;
@@ -1133,9 +1247,13 @@
                 await releaseProfileFetchLease(profileSlug);
             }
 
-            finalizeProfileFetchJob(profileSlug, preserveJob);
+            finalizeProfileFetchJob(workerId, profileSlug, preserveJob);
             scheduleProfileFetchQueueDrain(retryDelayMs);
         }
+    }
+
+    function getProfileFetchWorkerById(workerId) {
+        return profileFetchSchedulerState.workers.find((worker) => worker.id === workerId) || null;
     }
 
     function requeueProfileFetchJob(profileSlug) {
@@ -1152,12 +1270,23 @@
         scheduleProfileFetchRuntimeStatsPublish();
     }
 
-    function finalizeProfileFetchJob(profileSlug, preserveJob) {
-        profileFetchSchedulerState.activeCount = Math.max(0, profileFetchSchedulerState.activeCount - 1);
-        if (!preserveJob) {
-            profileFetchSchedulerState.jobsBySlug.delete(profileSlug);
+    function finalizeProfileFetchJob(workerId, profileSlug, preserveJob) {
+        const worker = getProfileFetchWorkerById(workerId);
+        if (worker) {
+            worker.status = "idle";
+            worker.activeProfileSlug = "";
         }
 
+        if (!preserveJob) {
+            profileFetchSchedulerState.jobsBySlug.delete(profileSlug);
+        } else {
+            const job = profileFetchSchedulerState.jobsBySlug.get(profileSlug);
+            if (job) {
+                delete job.workerId;
+            }
+        }
+
+        trimIdleProfileFetchWorkers();
         scheduleProfileFetchRuntimeStatsPublish();
     }
 
@@ -1203,7 +1332,6 @@
             penaltyMs * (2 ** (profileFetchSchedulerState.failureCount - 1))
         );
         const cooldownUntil = Date.now() + cooldownMs;
-        profileFetchSchedulerState.nextAllowedStartAt = Math.max(profileFetchSchedulerState.nextAllowedStartAt, cooldownUntil);
 
         await mutateProfileFetchSchedulerState((state) => {
             state.cooldownUntil = Math.max(state.cooldownUntil || 0, cooldownUntil);
@@ -1770,6 +1898,7 @@
 
     function replaceLocalProfileFetchSettings(nextSettings) {
         profileFetchSettingsState.values = normalizeProfileFetchSettings(nextSettings);
+        reconcileProfileFetchWorkers();
     }
 
     function installProfileFetchSettingsObserver() {
@@ -1855,10 +1984,6 @@
 
     function replaceLocalProfileFetchSchedulerState(nextState) {
         profileFetchSchedulerState.syncedState = nextState;
-        profileFetchSchedulerState.nextAllowedStartAt = Math.max(
-            profileFetchSchedulerState.nextAllowedStartAt,
-            nextState.cooldownUntil || 0
-        );
     }
 
     function mutateProfileFetchSchedulerState(mutation) {

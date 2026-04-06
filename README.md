@@ -87,14 +87,14 @@ Click the LiLi toolbar icon to open the popup and edit the fallback profile-fetc
 
 The popup stores these values in extension storage:
 
-- `Concurrency`
-- `Base gap, ms`
-- `Jitter min, ms`
-- `Jitter max, ms`
-- `Scroll idle, ms`
-- `Rolling budget, fetches`
+- `Workers`
+- `Per-worker gap, ms`
+- `Per-worker jitter min, ms`
+- `Per-worker jitter max, ms`
+- `Shared scroll idle, ms`
+- `Shared rolling budget, fetches`
 - `Rolling window, minutes`
-- `Backoff cap, minutes`
+- `Shared backoff cap, minutes`
 
 ## Permissions
 
