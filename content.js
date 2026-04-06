@@ -1418,7 +1418,7 @@
             }
 
             const profileRecord = getProfileDocumentRecord(html);
-            if (looksLikeUnexpectedProfileFetchHtml(html, profileRecord)) {
+            if (looksLikeUnexpectedProfileFetchHtml(html, profileSlug, profileRecord)) {
                 throw createProfileFetchError("parse", "Profile fetch returned an unexpected LinkedIn document");
             }
 
@@ -1526,10 +1526,14 @@
     }
 
     function looksLikeProtectedProfileFetchHtml(html) {
-        return /(captcha|security verification|verify to continue|unusual activity|challenge|let'?s do a quick security check)/i.test(html || "");
+        if (!html) {
+            return false;
+        }
+
+        return /(security verification|verify to continue|unusual activity detected|let'?s do a quick security check|checkpoint\/challenge|challenge\/captcha|id="captcha-internal"|name="challengeId")/i.test(html);
     }
 
-    function looksLikeUnexpectedProfileFetchHtml(html, profileRecord) {
+    function looksLikeUnexpectedProfileFetchHtml(html, profileSlug, profileRecord) {
         if (!html) {
             return true;
         }
@@ -1538,7 +1542,28 @@
             return false;
         }
 
-        return !/(stringValue\\":\\"Pending\\"|stringValue":"Pending"|stringValue\\":\\"Connect\\"|stringValue":"Connect"|Pending, click to withdraw invitation sent to|artdeco-entity-lockup|profile-displayphoto)/i.test(html);
+        const explicitStateDetected = /(stringValue\\":\\"Pending\\"|stringValue":"Pending"|stringValue\\":\\"Connect\\"|stringValue":"Connect"|Pending, click to withdraw invitation sent to)/i.test(html);
+        if (explicitStateDetected) {
+            return false;
+        }
+
+        return !looksLikeFetchedProfileHtml(html, profileSlug);
+    }
+
+    function looksLikeFetchedProfileHtml(html, profileSlug) {
+        if (!html || !profileSlug) {
+            return false;
+        }
+
+        const escapedSlug = escapeRegExp(profileSlug);
+        const slugPattern = new RegExp(`(?:/in/${escapedSlug}(?:[/?#"'])|"publicIdentifier":"${escapedSlug}"|"vanityName":"${escapedSlug}"|"entityUrn":"urn:li:fsd_profile:)`, "i");
+        const profileLayoutPattern = /(profile-displayphoto|artdeco-entity-lockup__title|pv-top-card|top-card-layout|profile-topcard-person-entity)/i;
+
+        return slugPattern.test(html) && profileLayoutPattern.test(html);
+    }
+
+    function escapeRegExp(value) {
+        return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     }
 
     function createProfileFetchError(code, message) {
