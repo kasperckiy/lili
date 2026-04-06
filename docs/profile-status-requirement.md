@@ -23,7 +23,7 @@ Show the correct relationship action for LinkedIn group members when the group m
 8. The scheduler must enforce a rolling budget of `8` fallback profile fetch starts per `5` minutes and must pause new fallback fetches when the budget is exhausted.
 9. The scheduler must apply cooldown/backoff after protection-like failures such as `429`, repeated `403`, challenge pages, timeouts, or unexpected profile documents, with a maximum cooldown of `10` minutes.
 10. After the profile response is parsed, render `Pending` when the profile document proves an existing invitation; otherwise render `Connect`.
-11. Cache both `Pending` and `Connect` results for `6` hours.
+11. Cache both `Pending` and `Connect` results for `24` hours.
 12. If the user clicks `Connect` and LinkedIn accepts the invite flow, store `Pending` in cache immediately.
 13. If LinkedIn reports an already-existing invitation during the invite flow, store `Pending` in cache immediately.
 14. If the user opens `https://www.linkedin.com/mynetwork/invitation-manager/sent/`, store `Pending` in cache for each visible invited profile there.

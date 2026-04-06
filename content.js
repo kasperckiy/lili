@@ -34,7 +34,7 @@
     };
     const PROFILE_STATUS_CACHE_KEY = "lili-profile-status-cache-v2";
     const PROFILE_FETCH_SCHEDULER_KEY = "lili-profile-fetch-scheduler-v1";
-    const PROFILE_STATUS_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+    const PROFILE_STATUS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
     const PROFILE_PAGE_SYNC_DEBOUNCE_MS = 250;
     const SENT_INVITATIONS_SYNC_DEBOUNCE_MS = 250;
     const ROUTE_WATCH_INTERVAL_MS = 500;

@@ -22,7 +22,7 @@ Main capabilities:
 - Uses LinkedIn's own invitation API instead of opening a hidden invite iframe.
 - Reuses LinkedIn page data and network responses when the page already exposes invitation state.
 - Falls back to fetching the profile document only when the group page does not expose enough information.
-- Caches both `Connect` and `Pending` results for 6 hours to avoid repeating the same work.
+- Caches both `Connect` and `Pending` results for 24 hours to avoid repeating the same work.
 - Syncs `Pending` state from LinkedIn's sent invitations page.
 - Syncs explicit `Connect` or `Pending` state from an opened concrete profile page.
 - Shares cached status across supported LinkedIn pages through extension storage.
@@ -194,7 +194,7 @@ What to do if `Challenge`, `Rate limit`, or cooldown values rise:
 
 ### Permissions And Privacy
 
-- `storage`: used to persist the scheduler settings, runtime stats, and the 6-hour profile-status cache.
+- `storage`: used to persist the scheduler settings, runtime stats, and the 24-hour profile-status cache.
 - `tabs`: used by the extension lifecycle logic to reload LinkedIn tabs after extension updates.
 - `https://www.linkedin.com/*`: required so the content script can run on supported LinkedIn pages.
 
@@ -408,7 +408,7 @@ Fallback-запросы считаются низкоприоритетными.
 
 ### Разрешения И Приватность
 
-- `storage`: нужно для хранения настроек scheduler, runtime stats и 6-часового profile-status cache.
+- `storage`: нужно для хранения настроек scheduler, runtime stats и 24-часового profile-status cache.
 - `tabs`: нужно для lifecycle-логики расширения, которая может перезагружать LinkedIn tabs после обновления расширения.
 - `https://www.linkedin.com/*`: нужно, чтобы content script работал на поддерживаемых страницах LinkedIn.
 
