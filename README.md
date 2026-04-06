@@ -22,6 +22,7 @@ This makes LinkedIn group member lists more useful for outreach and triage on pa
 - Builds a `Connect` action locally for non-`1st` members.
 - Sends the invite without leaving the current group members page.
 - Attempts to press LinkedIn's own `Send without a note` action automatically.
+- Treats LinkedIn invite responses like `CANT_RESEND_YET` as `Pending`, because LinkedIn is indicating the invitation already exists and cannot be resent yet.
 - Avoids extra fetch requests to LinkedIn profile pages.
 - Uses the profile vanity slug already present in the group member card URL.
 - Listens to live LinkedIn page Voyager responses and applies a best-effort `Pending` state when relationship data is already present there.

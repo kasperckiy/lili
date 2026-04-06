@@ -273,13 +273,13 @@
         inviteStateBySlug.set(profileSlug, { action: "sending" });
         rerenderCards(profileSlug);
 
-        const sent = await sendInviteWithoutNote(profileSlug);
+        const inviteOutcome = await sendInviteWithoutNote(profileSlug);
         inviteStateBySlug.delete(profileSlug);
 
-        if (sent) {
+        if (inviteOutcome === "sent" || inviteOutcome === "pending") {
             relationshipHints.set(profileSlug, {
                 action: "pending",
-                source: "invite-flow"
+                source: inviteOutcome === "pending" ? "invite-response" : "invite-flow"
             });
         }
 
@@ -316,10 +316,10 @@
             const sendButton = await waitForInviteSendButton(frame);
             sendButton.click();
 
-            return await waitForInviteOutcome(frame, requestObserver.state);
+            return await waitForInviteOutcome(requestObserver.state);
         } catch (error) {
             console.warn("[LiLi] Failed to send invite without note", error);
-            return false;
+            return "failure";
         } finally {
             requestObserver?.restore();
             frame.remove();
@@ -370,26 +370,18 @@
         throw new Error("Send without note button not found");
     }
 
-    async function waitForInviteOutcome(frame, requestState) {
+    async function waitForInviteOutcome(requestState) {
         const deadline = Date.now() + INVITE_RESULT_TIMEOUT_MS;
 
         while (Date.now() < deadline) {
-            if (requestState.success) {
-                return true;
-            }
-
-            if (requestState.failure) {
-                return false;
-            }
-
-            if (!queryInviteSendButton(frame.contentDocument)) {
-                return true;
+            if (requestState.outcome) {
+                return requestState.outcome;
             }
 
             await delay(INVITE_POLL_INTERVAL_MS);
         }
 
-        return requestState.success;
+        return requestState.outcome || "failure";
     }
 
     function queryInviteSendButton(doc) {
@@ -417,8 +409,7 @@
 
     function installInviteRequestObserver(frameWindow) {
         const state = {
-            success: false,
-            failure: false
+            outcome: ""
         };
 
         const originalFetch = typeof frameWindow.fetch === "function" ? frameWindow.fetch : null;
@@ -495,7 +486,7 @@
     }
 
     function updateInviteRequestState(state, method, urlLike, status, text) {
-        if (state.success || state.failure) {
+        if (state.outcome) {
             return;
         }
 
@@ -503,14 +494,35 @@
         const normalizedUrl = normalizeRequestUrl(urlLike);
         const haystack = `${normalizedMethod} ${normalizedUrl} ${text || ""}`;
 
+        if (looksLikeInvitePending(haystack, normalizedMethod, status)) {
+            state.outcome = "pending";
+            return;
+        }
+
         if (looksLikeInviteFailure(haystack, normalizedMethod, status)) {
-            state.failure = true;
+            state.outcome = "failure";
             return;
         }
 
         if (looksLikeInviteSuccess(haystack, normalizedMethod, status)) {
-            state.success = true;
+            state.outcome = "sent";
         }
+    }
+
+    function looksLikeInvitePending(text, method, status) {
+        if (method === "GET") {
+            return false;
+        }
+
+        if (status === 400 && /(CANT_RESEND_YET|ALREADY_INVITED|INVITATION_EXISTS|PENDING_INVITATION)/i.test(text)) {
+            return true;
+        }
+
+        if (status >= 200 && status < 400 && /(invitationState|PENDING|already invited|pending invitation)/i.test(text)) {
+            return true;
+        }
+
+        return false;
     }
 
     function looksLikeInviteSuccess(text, method, status) {
@@ -523,6 +535,10 @@
 
     function looksLikeInviteFailure(text, method, status) {
         if (method === "GET") {
+            return false;
+        }
+
+        if (looksLikeInvitePending(text, method, status)) {
             return false;
         }
 
