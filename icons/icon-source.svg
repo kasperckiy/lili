@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img"
+    aria-labelledby="title">
+    <title id="title">LiLi icon source</title>
+    <rect x="8" y="8" width="112" height="112" rx="28" fill="#f6faff" />
+    <rect x="18" y="20" width="92" height="24" rx="12" fill="#0a66c2" />
+    <rect x="18" y="52" width="92" height="24" rx="12" fill="#f59e0b" />
+    <rect x="18" y="84" width="92" height="24" rx="12" fill="#64748b" />
+    <circle cx="32" cy="32" r="6" fill="#ffffff" />
+    <circle cx="32" cy="64" r="6" fill="#ffffff" />
+    <circle cx="32" cy="96" r="6" fill="#ffffff" />
+    <path d="M90 32h-38" stroke="#ffffff" stroke-width="8" stroke-linecap="round" />
+    <path d="M90 64h-38" stroke="#ffffff" stroke-width="8" stroke-linecap="round" />
+    <path d="M90 96h-38" stroke="#ffffff" stroke-width="8" stroke-linecap="round" />
+</svg>

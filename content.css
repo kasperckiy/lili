@@ -1,39 +1,37 @@
-.lili-priority-action {
+.lili-connect-action {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     text-decoration: none;
+    flex-shrink: 0;
+    max-width: 100%;
 }
 
-.lili-priority-action:hover,
-.lili-priority-action:focus,
-.lili-priority-action:active {
+.lili-connect-action:hover,
+.lili-connect-action:focus,
+.lili-connect-action:active {
     text-decoration: none;
 }
 
-.lili-priority-action .artdeco-button__text {
+.lili-connect-action .artdeco-button__text {
     display: inline-flex;
     align-items: center;
     gap: 0.25rem;
 }
 
-.lili-priority-action--connect {
+.lili-connect-action.artdeco-button--primary {
     background-color: #0a66c2;
     border-color: #0a66c2;
     color: #ffffff;
 }
 
-.lili-priority-action--connect:hover,
-.lili-priority-action--connect:focus {
+.lili-connect-action.artdeco-button--primary:hover,
+.lili-connect-action.artdeco-button--primary:focus {
     background-color: #004182;
     border-color: #004182;
     color: #ffffff;
 }
 
-.lili-priority-action--pending {
+.lili-pending-action.artdeco-button--secondary {
     border-style: dashed;
-}
-
-.lili-priority-action--loading {
-    opacity: 0.7;
 }

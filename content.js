@@ -2,16 +2,14 @@
     const LINKEDIN_ORIGIN = "https://www.linkedin.com";
     const CARD_SELECTOR = "li.groups-members-list__typeahead-result";
     const PROFILE_LINK_SELECTOR = "a.ui-conditional-link-wrapper.ui-entity-action-row__link[href]";
-    const MESSAGE_BUTTON_SELECTOR = ".entry-point button.artdeco-button[aria-label*='Message']";
-    const CACHE_KEY = "liliLinkedInPriorityActionCacheV1";
-    const CACHE_TTL_MS = 12 * 60 * 60 * 1000;
-    const MAX_CONCURRENT_FETCHES = 2;
+    const DEGREE_SELECTOR = ".artdeco-entity-lockup__degree";
+    const NAME_SELECTOR = ".entity-action-title";
+    const ACTION_SELECTOR = ".entry-point .lili-connect-action, .entry-point .lili-pending-action, .entry-point button.artdeco-button[aria-label*='Message'], .entry-point a[aria-label*='Message']";
     const OBSERVER_MARGIN = "300px";
+    const NETWORK_HINT_EVENT = "lili:relationship-hints";
 
-    const cache = new Map();
-    const cardQueue = [];
-    let activeFetches = 0;
-    let persistTimer = null;
+    const relationshipHints = new Map();
+    const cardsBySlug = new Map();
 
     const intersectionObserver = new IntersectionObserver(handleIntersections, {
         root: null,
@@ -35,7 +33,9 @@
         }
     });
 
-    await loadCache();
+    injectNetworkObserver();
+    window.addEventListener(NETWORK_HINT_EVENT, handleNetworkHints);
+
     scanCards(document);
     mutationObserver.observe(document.body, { childList: true, subtree: true });
 
@@ -46,7 +46,37 @@
             }
 
             intersectionObserver.unobserve(entry.target);
-            enqueueCard(entry.target);
+            processCard(entry.target);
+        }
+    }
+
+    function handleNetworkHints(event) {
+        const records = Array.isArray(event.detail) ? event.detail : [];
+        for (const record of records) {
+            if (!record || record.action !== "pending" || !record.slug) {
+                continue;
+            }
+
+            const existing = relationshipHints.get(record.slug);
+            if (existing?.action === "pending") {
+                continue;
+            }
+
+            relationshipHints.set(record.slug, {
+                action: "pending",
+                source: record.source || "network"
+            });
+
+            const cards = cardsBySlug.get(record.slug);
+            if (!cards) {
+                continue;
+            }
+
+            cards.forEach((card) => {
+                if (card.isConnected) {
+                    renderCardAction(card);
+                }
+            });
         }
     }
 
@@ -67,56 +97,63 @@
         intersectionObserver.observe(card);
     }
 
-    function enqueueCard(card) {
+    function processCard(card) {
         if (!(card instanceof HTMLElement)) {
             return;
         }
 
-        if (card.dataset.liliPriorityQueued === "1") {
+        const profileUrl = getCardProfileUrl(card);
+        const profileSlug = getProfileSlug(profileUrl);
+        if (!profileUrl || !profileSlug) {
             return;
         }
 
-        card.dataset.liliPriorityQueued = "1";
-        cardQueue.push(card);
-        pumpQueue();
+        registerCard(profileSlug, card);
+        renderCardAction(card);
+        card.dataset.liliPriorityProcessed = "1";
     }
 
-    function pumpQueue() {
-        while (activeFetches < MAX_CONCURRENT_FETCHES && cardQueue.length > 0) {
-            const card = cardQueue.shift();
-            activeFetches += 1;
-            void processCard(card)
-                .catch((error) => {
-                    console.warn("[LiLi] Failed to process card", error);
-                })
-                .finally(() => {
-                    activeFetches -= 1;
-                    pumpQueue();
-                });
-        }
-    }
-
-    async function processCard(card) {
+    function renderCardAction(card) {
         if (!(card instanceof HTMLElement)) {
             return;
         }
 
-        try {
-            const profileUrl = getCardProfileUrl(card);
-            const messageButton = card.querySelector(MESSAGE_BUTTON_SELECTOR);
+        const profileUrl = getCardProfileUrl(card);
+        const profileSlug = getProfileSlug(profileUrl);
+        const currentAction = card.querySelector(ACTION_SELECTOR);
 
-            if (!profileUrl || !messageButton || card.dataset.liliPriorityProcessed === "1") {
-                return;
-            }
-
-            const action = await getPriorityAction(profileUrl);
-            applyAction(card, messageButton, profileUrl, action);
-            card.dataset.liliPriorityProcessed = "1";
-        } catch (error) {
-            delete card.dataset.liliPriorityQueued;
-            intersectionObserver.observe(card);
-            throw error;
+        if (!profileUrl || !profileSlug || !(currentAction instanceof HTMLElement)) {
+            return;
         }
+
+        const connectionDegree = getConnectionDegree(card);
+        if (connectionDegree === "1st") {
+            card.dataset.liliPriorityApplied = "message";
+            return;
+        }
+
+        const desiredAction = relationshipHints.get(profileSlug)?.action === "pending" ? "pending" : "connect";
+        if (currentAction.dataset.liliPriorityAction === desiredAction) {
+            card.dataset.liliPriorityApplied = desiredAction;
+            return;
+        }
+
+        const replacement = buildActionElement(card, currentAction, desiredAction, profileUrl, profileSlug);
+        if (!replacement) {
+            return;
+        }
+
+        currentAction.replaceWith(replacement);
+        card.dataset.liliPriorityApplied = desiredAction;
+    }
+
+    function registerCard(profileSlug, card) {
+        let cards = cardsBySlug.get(profileSlug);
+        if (!cards) {
+            cards = new Set();
+            cardsBySlug.set(profileSlug, cards);
+        }
+        cards.add(card);
     }
 
     function getCardProfileUrl(card) {
@@ -125,153 +162,78 @@
         return href ? normalizeLinkedInUrl(href) : "";
     }
 
-    async function getPriorityAction(profileUrl) {
-        const cacheKey = getCacheKey(profileUrl);
-        const cached = cache.get(cacheKey);
-
-        if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS) {
-            return cached;
+    function getProfileSlug(profileUrl) {
+        if (!profileUrl) {
+            return "";
         }
 
-        const action = await fetchProfileAction(profileUrl);
-        action.cachedAt = Date.now();
-        cache.set(cacheKey, action);
-        schedulePersistCache();
-        return action;
+        const url = new URL(profileUrl);
+        const parts = url.pathname.split("/").filter(Boolean);
+        if (parts[0] !== "in" || !parts[1]) {
+            return "";
+        }
+
+        return parts[1];
     }
 
-    async function fetchProfileAction(profileUrl) {
-        const response = await fetch(profileUrl, {
-            credentials: "include",
-            headers: {
-                "accept": "text/html,application/xhtml+xml"
-            }
-        });
-
-        if (!response.ok) {
-            throw new Error(`Profile fetch failed with ${response.status}`);
-        }
-
-        const html = await response.text();
-        const documentFragment = new DOMParser().parseFromString(html, "text/html");
-        const connect = findAction(documentFragment, "connect", profileUrl);
-        if (connect) {
-            return connect;
-        }
-
-        const pending = findAction(documentFragment, "pending", profileUrl);
-        if (pending) {
-            return pending;
-        }
-
-        const message = findAction(documentFragment, "message", profileUrl);
-        if (message) {
-            return message;
-        }
-
-        return {
-            kind: "message",
-            label: "Message",
-            url: profileUrl,
-            ariaLabel: `Open ${profileUrl}`
-        };
+    function getConnectionDegree(card) {
+        const degreeText = normalizeText(card.querySelector(DEGREE_SELECTOR)?.textContent || "");
+        return degreeText.replace(/^·\s*/, "");
     }
 
-    function findAction(doc, kind, profileUrl) {
-        const selectorsByKind = {
-            connect: [
-                "a[aria-label*='Invite'][aria-label*='connect'][href]",
-                "a[href*='/preload/custom-invite/'][href]"
-            ],
-            pending: [
-                "a[aria-label*='Pending'][href]",
-                "a[aria-label*='withdraw invitation'][href]"
-            ],
-            message: [
-                "a[href*='/messaging/compose/'][href]",
-                "button[aria-label*='Message']"
-            ]
-        };
-
-        const selectors = selectorsByKind[kind] || [];
-        for (const selector of selectors) {
-            const node = doc.querySelector(selector);
-            if (!node) {
-                continue;
-            }
-
-            const label = extractActionLabel(node, kind);
-            const href = node.getAttribute("href");
-            return {
-                kind,
-                label,
-                url: href ? normalizeLinkedInUrl(href) : profileUrl,
-                ariaLabel: node.getAttribute("aria-label") || label
-            };
-        }
-
-        return null;
-    }
-
-    function extractActionLabel(node, kind) {
-        const text = normalizeText(node.textContent || "");
-        if (text) {
-            if (text.includes("Connect")) {
-                return "Connect";
-            }
-            if (text.includes("Pending")) {
-                return "Pending";
-            }
-            if (text.includes("Message")) {
-                return "Message";
-            }
-        }
-
-        if (kind === "connect") {
-            return "Connect";
-        }
-        if (kind === "pending") {
-            return "Pending";
-        }
-        return "Message";
-    }
-
-    function applyAction(card, messageButton, profileUrl, action) {
-        if (!action || action.kind === "message") {
-            return;
-        }
-
+    function buildActionElement(card, currentAction, actionKind, profileUrl, profileSlug) {
+        const name = normalizeText(card.querySelector(NAME_SELECTOR)?.textContent || "");
         const replacement = document.createElement("a");
-        replacement.href = action.url || profileUrl;
-        replacement.target = "_blank";
-        replacement.rel = "noopener noreferrer";
-        replacement.role = "button";
-        replacement.className = buildReplacementClassName(messageButton, action.kind);
-        replacement.setAttribute("aria-label", action.ariaLabel || action.label);
-        replacement.dataset.liliPriorityAction = action.kind;
-        replacement.title = action.kind === "pending"
-            ? "Pending invitation detected on profile"
-            : "Connect action detected on profile";
+        replacement.href = actionKind === "pending"
+            ? profileUrl
+            : `/preload/custom-invite/?vanityName=${encodeURIComponent(profileSlug)}`;
+        replacement.className = buildActionClassName(currentAction, actionKind);
+        replacement.setAttribute(
+            "aria-label",
+            actionKind === "pending"
+                ? (name ? `Pending invitation for ${name}` : "Pending invitation")
+                : (name ? `Invite ${name} to connect` : "Invite to connect")
+        );
+        replacement.dataset.liliPriorityAction = actionKind;
+        replacement.dataset.liliPrioritySource = actionKind === "pending" ? "network-hint" : "slug";
+        replacement.title = actionKind === "pending"
+            ? "Pending invitation detected from LinkedIn page data"
+            : "Invite to connect";
 
         const text = document.createElement("span");
         text.className = "artdeco-button__text";
-        text.textContent = action.label;
+        text.textContent = actionKind === "pending" ? "Pending" : "Connect";
         replacement.appendChild(text);
 
-        messageButton.replaceWith(replacement);
-        card.dataset.liliPriorityApplied = action.kind;
+        return replacement;
     }
 
-    function buildReplacementClassName(messageButton, kind) {
-        const classes = new Set((messageButton.className || "").split(/\s+/).filter(Boolean));
+    function buildActionClassName(currentAction, actionKind) {
+        const classes = new Set((currentAction.className || "").split(/\s+/).filter(Boolean));
         classes.delete("artdeco-button--secondary");
         classes.delete("artdeco-button--primary");
         classes.add("artdeco-button");
         classes.add("artdeco-button--2");
-        classes.add(kind === "connect" ? "artdeco-button--primary" : "artdeco-button--secondary");
-        classes.add("lili-priority-action");
-        classes.add(`lili-priority-action--${kind}`);
+        classes.add(actionKind === "pending" ? "artdeco-button--secondary" : "artdeco-button--primary");
+        classes.add(actionKind === "pending" ? "lili-pending-action" : "lili-connect-action");
         return Array.from(classes).join(" ");
+    }
+
+    function injectNetworkObserver() {
+        if (document.documentElement.dataset.liliNetworkObserverInjected === "1") {
+            return;
+        }
+
+        document.documentElement.dataset.liliNetworkObserverInjected = "1";
+        const script = document.createElement("script");
+        script.dataset.liliEventName = NETWORK_HINT_EVENT;
+        script.src = chrome.runtime.getURL("page-network-probe.js");
+        script.addEventListener("load", () => script.remove(), { once: true });
+        script.addEventListener("error", () => {
+            console.warn("[LiLi] Failed to load page network probe");
+            script.remove();
+        }, { once: true });
+        (document.head || document.documentElement).appendChild(script);
     }
 
     function normalizeLinkedInUrl(urlLike) {
@@ -280,38 +242,8 @@
         return url.toString();
     }
 
-    function getCacheKey(profileUrl) {
-        const url = new URL(profileUrl);
-        return url.pathname.replace(/\/$/, "");
-    }
-
     function normalizeText(value) {
         return value.replace(/\s+/g, " ").trim();
     }
 
-    async function loadCache() {
-        const stored = await chrome.storage.local.get(CACHE_KEY);
-        const rawCache = stored[CACHE_KEY] || {};
-        for (const [key, value] of Object.entries(rawCache)) {
-            if (!value || typeof value !== "object") {
-                continue;
-            }
-            if (Date.now() - value.cachedAt >= CACHE_TTL_MS) {
-                continue;
-            }
-            cache.set(key, value);
-        }
-    }
-
-    function schedulePersistCache() {
-        if (persistTimer !== null) {
-            clearTimeout(persistTimer);
-        }
-
-        persistTimer = window.setTimeout(() => {
-            persistTimer = null;
-            const payload = Object.fromEntries(cache.entries());
-            void chrome.storage.local.set({ [CACHE_KEY]: payload });
-        }, 250);
-    }
 })();
