@@ -1,6 +1,7 @@
 (async () => {
     const LINKEDIN_ORIGIN = "https://www.linkedin.com";
     const GROUP_MEMBERS_PATH_PATTERN = /^\/groups\/[^/]+\/members(?:\/|$)/;
+    const PROFILE_PAGE_PATH_PATTERN = /^\/in\/[^/]+(?:\/|$)/;
     const SENT_INVITATIONS_PATH_PATTERN = /^\/mynetwork\/invitation-manager\/sent(?:\/|$)/;
     const CARD_SELECTOR = "li.groups-members-list__typeahead-result";
     const PROFILE_LINK_SELECTOR = "a.ui-conditional-link-wrapper.ui-entity-action-row__link[href]";
@@ -19,6 +20,7 @@
     const PROFILE_STATUS_CACHE_KEY = "lili-profile-status-cache-v2";
     const PROFILE_STATUS_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
     const SEND_WITHOUT_NOTE_LABEL = "Send without a note";
+    const PROFILE_PAGE_SYNC_DEBOUNCE_MS = 250;
     const SENT_INVITATIONS_SYNC_DEBOUNCE_MS = 250;
 
     const pageMode = getPageMode();
@@ -28,6 +30,9 @@
     const profileStatusBySlug = new Map();
     const profileProbeStateBySlug = new Map();
     const profileStatusCacheReady = loadProfileStatusCache();
+    const profilePageSyncState = {
+        timeoutId: 0
+    };
     const sentInvitationsSyncState = {
         timeoutId: 0
     };
@@ -54,12 +59,16 @@
         }
     });
 
+    installProfileStatusCacheObserver();
+
     if (pageMode === "group-members") {
         injectNetworkObserver();
         window.addEventListener(NETWORK_HINT_EVENT, handleNetworkHints);
 
         scanCards(document);
         mutationObserver.observe(document.body, { childList: true, subtree: true });
+    } else if (pageMode === "profile-page") {
+        void initializeProfilePageSync();
     } else if (pageMode === "sent-invitations") {
         void initializeSentInvitationsSync();
     }
@@ -71,11 +80,52 @@
             return "group-members";
         }
 
+        if (PROFILE_PAGE_PATH_PATTERN.test(pathName)) {
+            return "profile-page";
+        }
+
         if (SENT_INVITATIONS_PATH_PATTERN.test(pathName)) {
             return "sent-invitations";
         }
 
         return "unsupported";
+    }
+
+    async function initializeProfilePageSync() {
+        await profileStatusCacheReady;
+        await syncCurrentProfilePageCache();
+
+        const profilePageObserver = new MutationObserver(() => {
+            scheduleProfilePageSync();
+        });
+
+        profilePageObserver.observe(document.body, { childList: true, subtree: true });
+    }
+
+    function scheduleProfilePageSync() {
+        window.clearTimeout(profilePageSyncState.timeoutId);
+        profilePageSyncState.timeoutId = window.setTimeout(() => {
+            void syncCurrentProfilePageCache();
+        }, PROFILE_PAGE_SYNC_DEBOUNCE_MS);
+    }
+
+    async function syncCurrentProfilePageCache() {
+        const profileSlug = getProfileSlug(window.location.href);
+        if (!profileSlug) {
+            return;
+        }
+
+        const action = getProfileDocumentStatus(document.documentElement.outerHTML);
+        const didChange = action === "pending"
+            ? applyPendingStatus(profileSlug, "profile-page")
+            : applyConnectStatus(profileSlug, "profile-page");
+
+        if (!didChange) {
+            return;
+        }
+
+        await persistProfileStatusCache();
+        rerenderAllCards();
     }
 
     async function initializeSentInvitationsSync() {
@@ -566,15 +616,15 @@
             }
 
             const html = await response.text();
-            return hasPendingProfileDocumentState(html) ? "pending" : "connect";
+            return getProfileDocumentStatus(html);
         } finally {
             window.clearTimeout(timeoutId);
         }
     }
 
-    function hasPendingProfileDocumentState(html) {
+    function getProfileDocumentStatus(html) {
         if (!html) {
-            return false;
+            return "connect";
         }
 
         const hasInvitationState = /state:invitation:urn:li:member:[^"']+/i.test(html);
@@ -583,17 +633,19 @@
 
         if (hasInvitationState) {
             if (hasPendingStringValue) {
-                return true;
+                return "pending";
             }
 
             if (hasConnectStringValue) {
-                return false;
+                return "connect";
             }
         }
 
-        return /Pending, click to withdraw invitation sent to/i.test(html)
+        const hasFallbackPendingState = /Pending, click to withdraw invitation sent to/i.test(html)
             || /queryName\\":\\"ProfileMemberRelationshipRefreshById\\"|queryName":"ProfileMemberRelationshipRefreshById"/i.test(html)
-            && /withdrawInvitation|Withdraw invitation/i.test(html);
+                && /withdrawInvitation|Withdraw invitation/i.test(html);
+
+        return hasFallbackPendingState ? "pending" : "connect";
     }
 
     function getRandomProfileDelayMs() {
@@ -649,33 +701,42 @@
         return didChange;
     }
 
-    async function setCachedProfileStatus(profileSlug, action, source) {
+    function applyConnectStatus(profileSlug, source) {
+        const existingHint = relationshipHints.get(profileSlug);
+        const existingCache = getCachedProfileStatus(profileSlug);
+        const nextExpiresAt = Date.now() + PROFILE_STATUS_CACHE_TTL_MS;
+        const didChange = Boolean(existingHint)
+            || existingCache?.action !== "connect"
+            || existingCache?.source !== source
+            || !Number.isFinite(existingCache?.expiresAt)
+            || existingCache.expiresAt <= Date.now();
+
+        relationshipHints.delete(profileSlug);
+        inviteStateBySlug.delete(profileSlug);
+        profileProbeStateBySlug.delete(profileSlug);
         profileStatusBySlug.set(profileSlug, {
-            action,
+            action: "connect",
             source,
-            expiresAt: Date.now() + PROFILE_STATUS_CACHE_TTL_MS
+            expiresAt: nextExpiresAt
         });
+
+        return didChange;
+    }
+
+    async function setCachedProfileStatus(profileSlug, action, source) {
+        if (action === "pending") {
+            applyPendingStatus(profileSlug, source);
+        } else {
+            applyConnectStatus(profileSlug, source);
+        }
+
         await persistProfileStatusCache();
     }
 
     async function loadProfileStatusCache() {
         try {
             const storedCache = await readProfileStatusCache();
-            const now = Date.now();
-            let didPrune = false;
-
-            for (const [profileSlug, record] of Object.entries(storedCache)) {
-                if (!isValidProfileStatusRecord(record, now)) {
-                    didPrune = true;
-                    continue;
-                }
-
-                profileStatusBySlug.set(profileSlug, {
-                    action: record.action,
-                    source: record.source || "profile-cache",
-                    expiresAt: record.expiresAt
-                });
-            }
+            const { didPrune } = replaceProfileStatusCache(storedCache);
 
             if (didPrune) {
                 await persistProfileStatusCache();
@@ -685,6 +746,64 @@
         }
 
         rerenderAllCards();
+    }
+
+    function replaceProfileStatusCache(storedCache) {
+        const now = Date.now();
+        const nextRecords = new Map();
+        let didPrune = false;
+
+        for (const [profileSlug, record] of Object.entries(storedCache || {})) {
+            if (!isValidProfileStatusRecord(record, now)) {
+                didPrune = true;
+                continue;
+            }
+
+            nextRecords.set(profileSlug, {
+                action: record.action,
+                source: record.source || "profile-cache",
+                expiresAt: record.expiresAt
+            });
+        }
+
+        const affectedSlugs = new Set([
+            ...profileStatusBySlug.keys(),
+            ...nextRecords.keys()
+        ]);
+
+        profileStatusBySlug.clear();
+        for (const [profileSlug, record] of nextRecords.entries()) {
+            profileStatusBySlug.set(profileSlug, record);
+        }
+
+        for (const profileSlug of affectedSlugs) {
+            const record = nextRecords.get(profileSlug);
+            if (record?.action !== "pending") {
+                relationshipHints.delete(profileSlug);
+            }
+        }
+
+        return { didPrune };
+    }
+
+    function installProfileStatusCacheObserver() {
+        if (!chrome.storage?.onChanged) {
+            return;
+        }
+
+        chrome.storage.onChanged.addListener((changes, areaName) => {
+            if (areaName !== "local") {
+                return;
+            }
+
+            const change = changes[PROFILE_STATUS_CACHE_KEY];
+            if (!change) {
+                return;
+            }
+
+            replaceProfileStatusCache(change.newValue || {});
+            rerenderAllCards();
+        });
     }
 
     function isValidProfileStatusRecord(record, now) {

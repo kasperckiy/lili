@@ -11,6 +11,7 @@ Instead of always showing the default `Message` button, LiLi uses a simple local
 5. If LinkedIn itself returns invitation state in live Voyager API responses, LiLi can upgrade that card from `Connect` to `Pending` without opening the profile.
 6. If the group page still lacks invitation metadata, LiLi fetches the member profile document with a randomized delay, parses the embedded relationship state, and caches the result for 6 hours.
 7. If you open LinkedIn's sent invitations page, LiLi stores every visible profile there as cached `Pending`.
+8. If you open a concrete LinkedIn profile page, LiLi overwrites the cached status with the explicit `Connect` or `Pending` state from that page.
 
 This makes LinkedIn group member lists more useful for outreach and triage on pages like `https://www.linkedin.com/groups/123/members/`.
 
@@ -31,14 +32,15 @@ This makes LinkedIn group member lists more useful for outreach and triage on pa
 - Scans LinkedIn's embedded page JSON on first load, so `Pending` can appear immediately even when the relationship data was rendered into the initial HTML instead of arriving through a later XHR.
 - Falls back to a same-origin fetch of the profile HTML document for visible non-`1st` cards when the group page does not expose enough invitation metadata.
 - Prefers the explicit profile invitation state from LinkedIn's HTML over hidden withdraw templates, so a real `Connect` state is not upgraded to `Pending` by mistake.
+- Overwrites cached status from the currently opened LinkedIn profile page without making an additional profile request.
 - Randomizes profile status checks between `1` and `10000` ms per profile to avoid a burst of identical requests.
 - Stores `Pending` in cache immediately after a successful `Connect` flow.
-- Stores `Pending` in cache for profiles listed on `https://www.linkedin.com/mynetwork/invitation-manager/sent/`.
+- Overwrites cache with `Pending` for profiles listed on `https://www.linkedin.com/mynetwork/invitation-manager/sent/`.
 - Processes cards lazily near the viewport instead of scanning the whole page at once.
 
 ## How it works
 
-LiLi runs as a content script on LinkedIn group member pages and on LinkedIn's sent invitations page.
+LiLi runs as a content script on LinkedIn group member pages, concrete LinkedIn profile pages, and LinkedIn's sent invitations page.
 
 On group member pages it:
 
@@ -61,6 +63,13 @@ On the sent invitations page it:
 3. Stores each slug as cached `Pending` for 6 hours.
 4. Repeats the scan when LinkedIn loads more invitations into the list.
 
+On a concrete profile page it:
+
+1. Reads the current profile slug from the page URL.
+2. Parses the already loaded page HTML for the explicit invitation state.
+3. Overwrites the cache with `Connect` or `Pending` from that page.
+4. Propagates the updated cache to other open LiLi tabs through shared extension storage.
+
 ## Install locally
 
 1. Open Chrome and go to `chrome://extensions`.
@@ -71,7 +80,7 @@ On the sent invitations page it:
 ## Permissions
 
 - `storage`: required to persist the 6-hour profile status cache.
-- `https://www.linkedin.com/*`: required to run on LinkedIn group member pages and the sent invitations page.
+- `https://www.linkedin.com/*`: required to run on LinkedIn group member pages, profile pages, and the sent invitations page.
 
 ## Privacy
 
@@ -79,6 +88,7 @@ On the sent invitations page it:
 - All logic runs in the browser on the current LinkedIn page.
 - Clicking `Connect` may open LinkedIn's own invite preload flow in a hidden same-origin iframe so the current group page stays in place.
 - When the group page does not expose enough relationship data, LiLi may fetch the matching LinkedIn profile document and cache the resolved status locally for 6 hours.
+- When a concrete profile page is open, LiLi reuses that already loaded page to overwrite the cached relationship state and does not need an extra profile request for that overwrite.
 - When the sent invitations page is open, LiLi may also cache visible sent-invitation profiles as `Pending` for the same 6-hour TTL.
 
 ## Project files
@@ -94,6 +104,6 @@ On the sent invitations page it:
 
 - LinkedIn changes DOM and CSS frequently, so selectors may need updates.
 - The one-click invite flow assumes the profile card contains a valid public LinkedIn vanity slug and that LinkedIn keeps the current preload invite dialog structure.
-- `Pending` detection is still best-effort. LiLi trusts group-page data first, then the sent invitations list, then a profile HTML fetch; any of these can break if LinkedIn changes page structure or embedded invitation markers.
+- `Pending` detection is still best-effort. LiLi trusts group-page data first, then concrete profile pages and the sent invitations list, then a profile HTML fetch; any of these can break if LinkedIn changes page structure or embedded invitation markers.
 - Some profiles may still require extra LinkedIn UI steps, quota checks, or email gating that cannot be bypassed reliably from this extension.
 - The extension has been statically validated in this workspace, but not packaged for Chrome Web Store publication.

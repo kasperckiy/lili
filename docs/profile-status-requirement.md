@@ -23,6 +23,8 @@ Show the correct relationship action for LinkedIn group members when the group m
 8. If LinkedIn reports an already-existing invitation during the invite flow, store `Pending` in cache immediately.
 9. If the user opens `https://www.linkedin.com/mynetwork/invitation-manager/sent/`, store `Pending` in cache for each visible invited profile there.
 10. If LinkedIn appends more sent invitations to that page, repeat the cache sync for the newly visible profiles.
+11. If the user opens a concrete profile page at `https://www.linkedin.com/in/{slug}/`, overwrite the cache with the explicit `Connect` or `Pending` state from that already loaded profile page.
+12. Cache overwrites from concrete profile pages and from the sent invitations page must propagate to other open extension tabs through shared storage updates.
 
 ## UX notes
 
