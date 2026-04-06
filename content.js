@@ -229,7 +229,46 @@
             return document;
         }
 
-        return getEmbeddedPreloadDocument() || document;
+        const embeddedDocument = getEmbeddedPreloadDocument();
+        if (documentMatchesPageMode(embeddedDocument, mode)) {
+            return embeddedDocument;
+        }
+
+        return document;
+    }
+
+    function documentMatchesPageMode(targetDocument, mode) {
+        if (!targetDocument?.documentElement) {
+            return false;
+        }
+
+        const documentPathname = getDocumentPathname(targetDocument);
+        if (mode === "group-members") {
+            return GROUP_MEMBERS_PATH_PATTERN.test(documentPathname)
+                || targetDocument.querySelector(CARD_SELECTOR) instanceof HTMLElement;
+        }
+
+        if (mode === "profile-page") {
+            return PROFILE_PAGE_PATH_PATTERN.test(documentPathname)
+                || Boolean(getProfileSlug(documentPathname ? `${LINKEDIN_ORIGIN}${documentPathname}` : "")
+                    && targetDocument.querySelector("main")
+                    && getProfileDocumentRecord(targetDocument.documentElement.outerHTML).action);
+        }
+
+        if (mode === "sent-invitations") {
+            return SENT_INVITATIONS_PATH_PATTERN.test(documentPathname)
+                || targetDocument.querySelector(SENT_INVITATION_PROFILE_LINK_SELECTOR) instanceof HTMLAnchorElement;
+        }
+
+        return false;
+    }
+
+    function getDocumentPathname(targetDocument) {
+        try {
+            return targetDocument?.defaultView?.location?.pathname || "";
+        } catch {
+            return "";
+        }
     }
 
     function getEmbeddedPreloadDocument() {
