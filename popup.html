@@ -126,7 +126,8 @@
                                 id="runtime-setting-jitter">0s-0s</strong></div>
                         <div class="runtime-debug-row"><span>Shared scroll idle</span><strong
                                 id="runtime-setting-scroll-idle">0s</strong></div>
-                        <div class="runtime-debug-row"><span>Shared rolling budget</span><strong id="runtime-setting-budget">0
+                        <div class="runtime-debug-row"><span>Shared rolling budget</span><strong
+                                id="runtime-setting-budget">0
                                 / 0</strong></div>
                         <div class="runtime-debug-row"><span>Shared backoff cap</span><strong
                                 id="runtime-setting-backoff-cap">0s</strong></div>
@@ -211,6 +212,11 @@
         </form>
 
         <p id="status" class="status" aria-live="polite"></p>
+
+        <button id="clear-cache-button" type="button"
+            class="secondary-action secondary-action--danger secondary-action--wide">
+            Clear status cache
+        </button>
     </main>
 
     <script src="profile-fetch-settings.js"></script>

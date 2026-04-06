@@ -1,60 +1,61 @@
-{
-    "manifest_version": 3,
-    "name": "LinkedIn Group Priority Actions",
-    "short_name": "LiLi",
-    "version": "0.10.3",
-    "description": "Surfaces Connect or Pending on LinkedIn group member cards, with configurable throttled profile checks and direct LinkedIn invite API calls when needed.",
-    "minimum_chrome_version": "114",
-    "homepage_url": "https://github.com/kasperckiy/lili",
-    "icons": {
-        "16": "icons/icon16.png",
-        "32": "icons/icon32.png",
-        "48": "icons/icon48.png",
-        "128": "icons/icon128.png"
-    },
-    "permissions": [
-        "storage",
-        "tabs"
-    ],
-    "background": {
-        "service_worker": "background.js"
-    },
-    "host_permissions": [
-        "https://www.linkedin.com/*"
-    ],
-    "action": {
-        "default_title": "LiLi",
-        "default_popup": "popup.html",
-        "default_icon": {
+    "version": "0.10.4",
+    {
+        "manifest_version": 3,
+        "name": "LinkedIn Group Priority Actions",
+        "short_name": "LiLi",
+        "version": "0.10.3",
+        "description": "Surfaces Connect or Pending on LinkedIn group member cards, with configurable throttled profile checks and direct LinkedIn invite API calls when needed.",
+        "minimum_chrome_version": "114",
+        "homepage_url": "https://github.com/kasperckiy/lili",
+        "icons": {
             "16": "icons/icon16.png",
             "32": "icons/icon32.png",
             "48": "icons/icon48.png",
             "128": "icons/icon128.png"
-        }
-    },
-    "content_scripts": [
-        {
-            "matches": [
-                "https://www.linkedin.com/*"
-            ],
-            "js": [
-                "profile-fetch-settings.js",
-                "content.js"
-            ],
-            "css": [
-                "content.css"
-            ],
-            "run_at": "document_idle"
-        }
-    ],
-    "web_accessible_resources": [
-        {
-            "resources": [
-                "page-network-probe.js"
-            ],
-            "matches": [
-                "https://www.linkedin.com/*"
-            ]
-        }
-    ]
-}
+        },
+        "permissions": [
+            "storage",
+            "tabs"
+        ],
+        "background": {
+            "service_worker": "background.js"
+        },
+        "host_permissions": [
+            "https://www.linkedin.com/*"
+        ],
+        "action": {
+            "default_title": "LiLi",
+            "default_popup": "popup.html",
+            "default_icon": {
+                "16": "icons/icon16.png",
+                "32": "icons/icon32.png",
+                "48": "icons/icon48.png",
+                "128": "icons/icon128.png"
+            }
+        },
+        "content_scripts": [
+            {
+                "matches": [
+                    "https://www.linkedin.com/*"
+                ],
+                "js": [
+                    "profile-fetch-settings.js",
+                    "content.js"
+                ],
+                "css": [
+                    "content.css"
+                ],
+                "run_at": "document_idle"
+            }
+        ],
+        "web_accessible_resources": [
+            {
+                "resources": [
+                    "page-network-probe.js"
+                ],
+                "matches": [
+                    "https://www.linkedin.com/*"
+                ]
+            }
+        ]
+    }

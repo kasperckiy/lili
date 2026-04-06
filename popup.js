@@ -15,7 +15,9 @@
 
     const form = document.getElementById("settings-form");
     const statusNode = document.getElementById("status");
+    const saveButton = document.getElementById("save-button");
     const resetButton = document.getElementById("reset-button");
+    const clearCacheButton = document.getElementById("clear-cache-button");
     const runtimeNodes = {
         queuedCount: document.getElementById("runtime-queued-count"),
         activeCount: document.getElementById("runtime-active-count"),
@@ -55,6 +57,8 @@
 
     let lastRuntimeSnapshot = null;
     let runtimeTickerId = 0;
+    let isSettingsFormDirty = false;
+    let isSettingsLoadComplete = false;
 
     const fields = {
         workerCount: document.getElementById("workerCount"),
@@ -72,10 +76,26 @@
         void saveSettings();
     });
 
+    Object.values(fields).forEach((field) => {
+        field?.addEventListener("input", () => {
+            isSettingsFormDirty = true;
+        });
+        field?.addEventListener("change", () => {
+            isSettingsFormDirty = true;
+        });
+    });
+
     resetButton?.addEventListener("click", () => {
         applySettingsToForm(DEFAULT_PROFILE_FETCH_SETTINGS);
+        isSettingsFormDirty = false;
         void saveSettings("Defaults restored.");
     });
+
+    clearCacheButton?.addEventListener("click", () => {
+        void clearStatusCache();
+    });
+
+    setSettingsFormEnabled(false);
 
     if (chrome.storage?.onChanged) {
         chrome.storage.onChanged.addListener((changes, areaName) => {
@@ -101,11 +121,20 @@
         try {
             const result = await chrome.storage.local.get([SETTINGS_STORAGE_KEY]);
             const settings = normalizeProfileFetchSettings(result?.[SETTINGS_STORAGE_KEY]);
+            if (isSettingsFormDirty && isSettingsLoadComplete) {
+                return;
+            }
             applySettingsToForm(settings);
+            isSettingsFormDirty = false;
+            isSettingsLoadComplete = true;
+            setSettingsFormEnabled(true);
             setStatus("Loaded current scheduler settings.");
         } catch (error) {
             console.warn("[LiLi] Failed to load popup settings", error);
             applySettingsToForm(DEFAULT_PROFILE_FETCH_SETTINGS);
+            isSettingsFormDirty = false;
+            isSettingsLoadComplete = true;
+            setSettingsFormEnabled(true);
             setStatus("Failed to load stored settings. Showing defaults.");
         }
     }
@@ -114,6 +143,7 @@
         try {
             const settings = normalizeProfileFetchSettings(readSettingsFromForm());
             applySettingsToForm(settings);
+            isSettingsFormDirty = false;
             await chrome.storage.local.set({
                 [SETTINGS_STORAGE_KEY]: settings
             });
@@ -121,6 +151,20 @@
         } catch (error) {
             console.warn("[LiLi] Failed to save popup settings", error);
             setStatus("Failed to save settings.");
+        }
+    }
+
+    async function clearStatusCache() {
+        try {
+            if (chrome.storage?.local) {
+                await chrome.storage.local.remove([PROFILE_STATUS_CACHE_KEY]);
+            }
+            lastRuntimeSnapshot = null;
+            await loadRuntimeStats();
+            setStatus("Status cache cleared.");
+        } catch (error) {
+            console.warn("[LiLi] Failed to clear popup cache", error);
+            setStatus("Failed to clear status cache.");
         }
     }
 
@@ -308,7 +352,17 @@
     function createEmptyFailureCounts() {
         return {
             challenge: 0,
-            "rate-limit": 0,
+            await new Promise((resolve, reject) => {
+                chrome.storage.local.remove([PROFILE_STATUS_CACHE_KEY], () => {
+                    const error = chrome.runtime?.lastError;
+                    if (error) {
+                        reject(new Error(error.message));
+                        return;
+                    }
+
+                    resolve();
+                });
+            });
             timeout: 0,
             forbidden: 0,
             server: 0,
@@ -464,6 +518,23 @@
     function setFieldValue(field, value) {
         if (field instanceof HTMLInputElement) {
             field.value = String(value);
+        }
+    }
+
+    function setSettingsFormEnabled(enabled) {
+        const disabled = !enabled;
+        Object.values(fields).forEach((field) => {
+            if (field instanceof HTMLInputElement) {
+                field.disabled = disabled;
+            }
+        });
+
+        if (saveButton instanceof HTMLButtonElement) {
+            saveButton.disabled = disabled;
+        }
+
+        if (resetButton instanceof HTMLButtonElement) {
+            resetButton.disabled = disabled;
         }
     }
 

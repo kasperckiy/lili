@@ -61,6 +61,8 @@ Important interpretation rule:
 - The top summary counters are aggregated across all active LinkedIn group-member tabs that are currently reporting runtime stats.
 - The detailed debug cards below are based on the most recently updated reporting tab.
 - The cache count is shared across supported LinkedIn pages because the cache lives in extension storage.
+- The `Clear status cache` button at the bottom of the popup deletes the shared cached `Connect` and `Pending` records immediately.
+- Caches both `Connect` and `Pending` results for 24 hours.
 
 ### Popup Summary Counters
 
@@ -236,7 +238,7 @@ LiLi в первую очередь решает практическую зад
 - Использует собственный invite API LinkedIn, а не скрытый iframe.
 - Переиспользует уже доступные данные страницы и сетевые ответы LinkedIn, если статус приглашения уже где-то есть.
 - Запрашивает HTML профиля только тогда, когда сама страница группы не дает достаточно информации.
-- Кэширует результаты `Connect` и `Pending` на 6 часов.
+- Кэширует результаты `Connect` и `Pending` на 24 часа.
 - Подтягивает `Pending` со страницы отправленных приглашений LinkedIn.
 - Подтягивает явный `Connect` или `Pending` с открытой страницы конкретного профиля.
 - Делится кэшем между поддерживаемыми страницами LinkedIn через storage расширения.
@@ -275,6 +277,7 @@ Popup выполняет две задачи:
 - Верхние summary-показатели агрегируются по всем активным tabs со страницами участников групп, которые сейчас публикуют runtime stats.
 - Подробные debug-карточки ниже показывают состояние только для той вкладки, которая обновлялась последней.
 - `Cache entries` общий для всех поддерживаемых страниц, потому что кэш хранится в extension storage.
+- Кнопка `Clear status cache` в самом низу popup сразу очищает общий кэш статусов `Connect` и `Pending`.
 
 ### Верхние Показатели Popup
 
