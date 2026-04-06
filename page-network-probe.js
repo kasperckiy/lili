@@ -318,23 +318,39 @@
 
     function hasPendingProfileAction(entity) {
         const primaryAction = entity.profileStatefulProfileActions?.primaryActionResolutionResult;
+        const statefulRelationship = primaryAction?.statefulAction?.actionDataModel?.relationshipActionData?.relationshipData;
+        const connectionOrInvitation = primaryAction?.statefulAction?.actionDataModel?.connectionOrInvitation;
+
         return hasNonNullValue(primaryAction?.withdraw)
             || hasNonNullValue(primaryAction?.["*withdraw"])
             || hasActualInvitationValue(primaryAction?.invitation)
-            || hasActualInvitationValue(primaryAction?.["*invitation"]);
+            || hasActualInvitationValue(primaryAction?.["*invitation"])
+            || hasPendingRelationshipData(statefulRelationship)
+            || hasActualInvitationValue(connectionOrInvitation);
     }
 
     function hasPendingRelationship(entity) {
-        const relationship = entity.memberRelationship
-            || entity.memberRelationshipData
-            || entity.memberRelationshipUnion
-            || entity.memberRelationshipWrapper?.memberRelationship;
+        const candidates = [
+            entity.memberRelationship,
+            entity.memberRelationshipData,
+            entity.memberRelationshipDataResolutionResult,
+            entity.memberRelationshipUnion,
+            entity.memberRelationshipWrapper?.memberRelationship,
+            entity.memberRelationshipWrapper?.memberRelationshipData,
+            entity.memberRelationshipWrapper?.memberRelationshipDataResolutionResult
+        ];
 
+        return candidates.some(hasPendingRelationshipData);
+    }
+
+    function hasPendingRelationshipData(relationship) {
         if (!relationship || typeof relationship !== "object") {
             return false;
         }
 
-        return hasActualInvitationValue(relationship.invitation)
+        return hasActualInvitationValue(relationship.memberRelationshipData)
+            || hasActualInvitationValue(relationship.memberRelationshipDataResolutionResult)
+            || hasActualInvitationValue(relationship.invitation)
             || hasActualInvitationValue(relationship["*invitation"])
             || hasActualInvitationValue(relationship.invitationUnion)
             || hasActualInvitationValue(relationship.noConnection?.invitation)

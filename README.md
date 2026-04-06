@@ -25,7 +25,7 @@ This makes LinkedIn group member lists more useful for outreach and triage on pa
 - Treats LinkedIn invite responses like `CANT_RESEND_YET` as `Pending`, because LinkedIn is indicating the invitation already exists and cannot be resent yet.
 - Avoids extra fetch requests to LinkedIn profile pages.
 - Uses the profile vanity slug already present in the group member card URL.
-- Listens to live LinkedIn page Voyager responses and applies a best-effort `Pending` state when relationship data is already present there.
+- Listens to live LinkedIn page Voyager responses and applies a best-effort `Pending` state when relationship data or resolved invitation metadata is already present there.
 - Scans LinkedIn's embedded page JSON on first load, so `Pending` can appear immediately even when the relationship data was rendered into the initial HTML instead of arriving through a later XHR.
 - Processes cards lazily near the viewport instead of scanning the whole page at once.
 
@@ -76,6 +76,6 @@ For each visible member card it:
 
 - LinkedIn changes DOM and CSS frequently, so selectors may need updates.
 - The one-click invite flow assumes the profile card contains a valid public LinkedIn vanity slug and that LinkedIn keeps the current preload invite dialog structure.
-- `Pending` detection depends on LinkedIn exposing invitation state in the current page's own API responses, so it is intentionally best-effort rather than guaranteed.
+- `Pending` detection depends on LinkedIn exposing invitation state or resolved relationship metadata in the current page's own API responses, so it is intentionally best-effort rather than guaranteed.
 - Some profiles may still require extra LinkedIn UI steps, quota checks, or email gating that cannot be bypassed reliably from this extension.
 - The extension has been statically validated in this workspace, but not packaged for Chrome Web Store publication.
