@@ -6,6 +6,7 @@
     const CARD_SELECTOR = "li.groups-members-list__typeahead-result";
     const PROFILE_LINK_SELECTOR = "a.ui-conditional-link-wrapper.ui-entity-action-row__link[href]";
     const SENT_INVITATION_PROFILE_LINK_SELECTOR = "main a[href*='/in/']";
+    const PRELOAD_FRAME_SELECTOR = "iframe[src*='/preload/']";
     const DEGREE_SELECTOR = ".artdeco-entity-lockup__degree";
     const NAME_SELECTOR = ".entity-action-title";
     const ACTION_SELECTOR = ".entry-point .lili-connect-action, .entry-point .lili-pending-action, .entry-point .lili-sending-action, .entry-point .lili-loading-action, .entry-point button.artdeco-button[aria-label*='Message'], .entry-point a[aria-label*='Message']";
@@ -49,10 +50,14 @@
     const profileFetchSettingsReady = loadProfileFetchSettings();
     const profileFetchSchedulerReady = loadProfileFetchSchedulerState();
     const profilePageSyncState = {
-        timeoutId: 0
+        timeoutId: 0,
+        observer: null,
+        observedDocument: null
     };
     const sentInvitationsSyncState = {
-        timeoutId: 0
+        timeoutId: 0,
+        observer: null,
+        observedDocument: null
     };
 
     const intersectionObserver = new IntersectionObserver(handleIntersections, {
@@ -105,9 +110,12 @@
             lastUrl: "",
             routeTimerId: 0,
             routeWatchIntervalId: 0,
+            activePageDocument: null,
             groupMembersInitialized: false,
+            groupMembersObservedDocument: null,
             profilePageSyncInitialized: false,
-            sentInvitationsSyncInitialized: false
+            sentInvitationsSyncInitialized: false,
+            networkHintTargetWindow: null
         };
     }
 
@@ -122,7 +130,8 @@
         window.addEventListener("click", schedulePageModeRefresh, true);
 
         pageLifecycleState.routeWatchIntervalId = window.setInterval(() => {
-            if (pageLifecycleState.lastUrl !== window.location.href) {
+            if (pageLifecycleState.lastUrl !== window.location.href
+                || pageLifecycleState.activePageDocument !== getActivePageDocument()) {
                 schedulePageModeRefresh();
             }
         }, ROUTE_WATCH_INTERVAL_MS);
@@ -158,48 +167,99 @@
     async function refreshPageMode() {
         const nextUrl = window.location.href;
         const nextMode = getPageMode();
+        const nextDocument = getActivePageDocument(nextMode);
         const previousMode = pageLifecycleState.currentMode;
         const didModeChange = previousMode !== nextMode;
         const didUrlChange = pageLifecycleState.lastUrl !== nextUrl;
+        const didDocumentChange = pageLifecycleState.activePageDocument !== nextDocument;
 
-        if (!didModeChange && !didUrlChange) {
+        if (!didModeChange && !didUrlChange && !didDocumentChange) {
             return;
         }
 
         pageLifecycleState.lastUrl = nextUrl;
         pageLifecycleState.currentMode = nextMode;
+        pageLifecycleState.activePageDocument = nextDocument;
 
         if (previousMode === "group-members" && nextMode !== "group-members") {
+            mutationObserver.disconnect();
+            pageLifecycleState.groupMembersObservedDocument = null;
+            setNetworkHintTargetWindow(null);
             void clearProfileFetchRuntimeStats();
         }
 
         if (nextMode === "group-members") {
-            activateGroupMembersPage();
+            activateGroupMembersPage(nextDocument);
             return;
         }
 
         if (nextMode === "profile-page") {
-            await initializeProfilePageSync();
+            await initializeProfilePageSync(nextDocument);
             return;
         }
 
         if (nextMode === "sent-invitations") {
-            await initializeSentInvitationsSync();
+            await initializeSentInvitationsSync(nextDocument);
         }
     }
 
-    function activateGroupMembersPage() {
+    function activateGroupMembersPage(targetDocument = getActivePageDocument("group-members")) {
         if (!pageLifecycleState.groupMembersInitialized) {
             pageLifecycleState.groupMembersInitialized = true;
             initializeProfileFetchScheduler();
-            injectNetworkObserver();
-            window.addEventListener(NETWORK_HINT_EVENT, handleNetworkHints);
-            mutationObserver.observe(document.body, { childList: true, subtree: true });
         }
 
-        scanCards(document);
+        injectNetworkObserver(targetDocument);
+        setNetworkHintTargetWindow(getDocumentWindow(targetDocument));
+
+        if (targetDocument?.body && pageLifecycleState.groupMembersObservedDocument !== targetDocument) {
+            mutationObserver.disconnect();
+            mutationObserver.observe(targetDocument.body, { childList: true, subtree: true });
+            pageLifecycleState.groupMembersObservedDocument = targetDocument;
+        }
+
+        scanCards(targetDocument);
         scheduleProfileFetchQueueDrain();
         scheduleProfileFetchRuntimeStatsPublish();
+    }
+
+    function getActivePageDocument(mode = pageLifecycleState.currentMode) {
+        if (mode !== "group-members" && mode !== "profile-page" && mode !== "sent-invitations") {
+            return document;
+        }
+
+        return getEmbeddedPreloadDocument() || document;
+    }
+
+    function getEmbeddedPreloadDocument() {
+        const preloadFrame = document.querySelector(PRELOAD_FRAME_SELECTOR);
+        if (!(preloadFrame instanceof HTMLIFrameElement)) {
+            return null;
+        }
+
+        try {
+            const frameDocument = preloadFrame.contentDocument;
+            return frameDocument?.documentElement ? frameDocument : null;
+        } catch {
+            return null;
+        }
+    }
+
+    function getDocumentWindow(targetDocument) {
+        return targetDocument?.defaultView || window;
+    }
+
+    function setNetworkHintTargetWindow(targetWindow) {
+        const previousWindow = pageLifecycleState.networkHintTargetWindow;
+        if (previousWindow && previousWindow !== targetWindow) {
+            previousWindow.removeEventListener(NETWORK_HINT_EVENT, handleNetworkHints);
+        }
+
+        if (targetWindow && previousWindow !== targetWindow) {
+            targetWindow.addEventListener(NETWORK_HINT_EVENT, handleNetworkHints);
+        }
+
+        pageLifecycleState.networkHintTargetWindow = targetWindow || null;
     }
 
     function getPageMode() {
@@ -220,37 +280,43 @@
         return "unsupported";
     }
 
-    async function initializeProfilePageSync() {
+    async function initializeProfilePageSync(targetDocument = getActivePageDocument("profile-page")) {
         await profileStatusCacheReady;
-        await syncCurrentProfilePageCache();
+        await syncCurrentProfilePageCache(targetDocument);
 
-        if (pageLifecycleState.profilePageSyncInitialized) {
+        if (!profilePageSyncState.observer) {
+            profilePageSyncState.observer = new MutationObserver(() => {
+                scheduleProfilePageSync();
+            });
+        }
+
+        if (pageLifecycleState.profilePageSyncInitialized && profilePageSyncState.observedDocument === targetDocument) {
             return;
         }
 
         pageLifecycleState.profilePageSyncInitialized = true;
-
-        const profilePageObserver = new MutationObserver(() => {
-            scheduleProfilePageSync();
-        });
-
-        profilePageObserver.observe(document.body, { childList: true, subtree: true });
+        profilePageSyncState.observer.disconnect();
+        if (targetDocument?.body) {
+            profilePageSyncState.observer.observe(targetDocument.body, { childList: true, subtree: true });
+            profilePageSyncState.observedDocument = targetDocument;
+        }
     }
 
     function scheduleProfilePageSync() {
         window.clearTimeout(profilePageSyncState.timeoutId);
         profilePageSyncState.timeoutId = window.setTimeout(() => {
-            void syncCurrentProfilePageCache();
+            void syncCurrentProfilePageCache(getActivePageDocument("profile-page"));
         }, PROFILE_PAGE_SYNC_DEBOUNCE_MS);
     }
 
-    async function syncCurrentProfilePageCache() {
+    async function syncCurrentProfilePageCache(targetDocument = getActivePageDocument("profile-page")) {
         const profileSlug = getProfileSlug(window.location.href);
         if (!profileSlug) {
             return;
         }
 
-        const profileRecord = getProfileDocumentRecord(document.documentElement.outerHTML);
+        const htmlDocument = targetDocument?.documentElement?.outerHTML || document.documentElement.outerHTML;
+        const profileRecord = getProfileDocumentRecord(htmlDocument);
         const didChange = profileRecord.action === "pending"
             ? applyPendingStatus(profileSlug, "profile-page", profileRecord.profileUrn)
             : applyConnectStatus(profileSlug, "profile-page", profileRecord.profileUrn);
@@ -263,27 +329,32 @@
         rerenderAllCards();
     }
 
-    async function initializeSentInvitationsSync() {
+    async function initializeSentInvitationsSync(targetDocument = getActivePageDocument("sent-invitations")) {
         await profileStatusCacheReady;
-        await syncSentInvitationsCache(document);
+        await syncSentInvitationsCache(targetDocument);
 
-        if (pageLifecycleState.sentInvitationsSyncInitialized) {
+        if (!sentInvitationsSyncState.observer) {
+            sentInvitationsSyncState.observer = new MutationObserver(() => {
+                scheduleSentInvitationsSync();
+            });
+        }
+
+        if (pageLifecycleState.sentInvitationsSyncInitialized && sentInvitationsSyncState.observedDocument === targetDocument) {
             return;
         }
 
         pageLifecycleState.sentInvitationsSyncInitialized = true;
-
-        const sentInvitationsObserver = new MutationObserver(() => {
-            scheduleSentInvitationsSync();
-        });
-
-        sentInvitationsObserver.observe(document.body, { childList: true, subtree: true });
+        sentInvitationsSyncState.observer.disconnect();
+        if (targetDocument?.body) {
+            sentInvitationsSyncState.observer.observe(targetDocument.body, { childList: true, subtree: true });
+            sentInvitationsSyncState.observedDocument = targetDocument;
+        }
     }
 
     function scheduleSentInvitationsSync() {
         window.clearTimeout(sentInvitationsSyncState.timeoutId);
         sentInvitationsSyncState.timeoutId = window.setTimeout(() => {
-            void syncSentInvitationsCache(document);
+            void syncSentInvitationsCache(getActivePageDocument("sent-invitations"));
         }, SENT_INVITATIONS_SYNC_DEBOUNCE_MS);
     }
 
@@ -589,6 +660,11 @@
             return;
         }
 
+        if (card.ownerDocument !== document) {
+            processCard(card);
+            return;
+        }
+
         if (card.dataset.liliPriorityObserved === "1") {
             return;
         }
@@ -796,7 +872,8 @@
     function buildActionElement(card, currentAction, actionKind, profileUrl, profileSlug) {
         const name = normalizeText(card.querySelector(NAME_SELECTOR)?.textContent || "");
         const actionSource = getActionSource(profileSlug, actionKind);
-        const replacement = document.createElement("button");
+        const elementDocument = card.ownerDocument || document;
+        const replacement = elementDocument.createElement("button");
         replacement.type = "button";
         replacement.className = buildActionClassName(currentAction, actionKind);
         replacement.setAttribute(
@@ -828,7 +905,7 @@
             replacement.setAttribute("aria-busy", "true");
         }
 
-        const text = document.createElement("span");
+        const text = elementDocument.createElement("span");
         text.className = "artdeco-button__text";
         text.textContent = actionKind === "pending"
             ? "Pending"
@@ -2084,13 +2161,13 @@
         });
     }
 
-    function injectNetworkObserver() {
-        if (document.documentElement.dataset.liliNetworkObserverInjected === "1") {
+    function injectNetworkObserver(targetDocument = document) {
+        if (!targetDocument?.documentElement || targetDocument.documentElement.dataset.liliNetworkObserverInjected === "1") {
             return;
         }
 
-        document.documentElement.dataset.liliNetworkObserverInjected = "1";
-        const script = document.createElement("script");
+        targetDocument.documentElement.dataset.liliNetworkObserverInjected = "1";
+        const script = targetDocument.createElement("script");
         script.dataset.liliEventName = NETWORK_HINT_EVENT;
         script.src = chrome.runtime.getURL("page-network-probe.js");
         script.addEventListener("load", () => script.remove(), { once: true });
@@ -2098,7 +2175,7 @@
             console.warn("[LiLi] Failed to load page network probe");
             script.remove();
         }, { once: true });
-        (document.head || document.documentElement).appendChild(script);
+        (targetDocument.head || targetDocument.documentElement).appendChild(script);
     }
 
     function normalizeLinkedInUrl(urlLike) {
