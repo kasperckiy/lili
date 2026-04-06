@@ -16,7 +16,7 @@
     const PROFILE_FETCH_TIMEOUT_MS = 15000;
     const PROFILE_REQUEST_DELAY_MIN_MS = 1;
     const PROFILE_REQUEST_DELAY_MAX_MS = 10000;
-    const PROFILE_STATUS_CACHE_KEY = "lili-profile-status-cache-v1";
+    const PROFILE_STATUS_CACHE_KEY = "lili-profile-status-cache-v2";
     const PROFILE_STATUS_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
     const SEND_WITHOUT_NOTE_LABEL = "Send without a note";
     const SENT_INVITATIONS_SYNC_DEBOUNCE_MS = 250;
@@ -577,9 +577,21 @@
             return false;
         }
 
-        return /state:invitation:urn:li:member:[^"']+/i.test(html)
-            && /stringValue\\":\\"Pending\\"|stringValue":"Pending"/i.test(html)
-            || /Pending, click to withdraw invitation sent to/i.test(html)
+        const hasInvitationState = /state:invitation:urn:li:member:[^"']+/i.test(html);
+        const hasPendingStringValue = /stringValue\\":\\"Pending\\"|stringValue":"Pending"/i.test(html);
+        const hasConnectStringValue = /stringValue\\":\\"Connect\\"|stringValue":"Connect"/i.test(html);
+
+        if (hasInvitationState) {
+            if (hasPendingStringValue) {
+                return true;
+            }
+
+            if (hasConnectStringValue) {
+                return false;
+            }
+        }
+
+        return /Pending, click to withdraw invitation sent to/i.test(html)
             || /queryName\\":\\"ProfileMemberRelationshipRefreshById\\"|queryName":"ProfileMemberRelationshipRefreshById"/i.test(html)
             && /withdrawInvitation|Withdraw invitation/i.test(html);
     }
@@ -613,7 +625,7 @@
     function applyPendingStatus(profileSlug, source) {
         const existingHint = relationshipHints.get(profileSlug);
         const existingCache = getCachedProfileStatus(profileSlug);
-        const cachedSource = source === "network" ? "profile-cache" : source;
+        const cachedSource = source;
         const nextExpiresAt = Date.now() + PROFILE_STATUS_CACHE_TTL_MS;
         const didChange = existingHint?.action !== "pending"
             || existingHint?.source !== source
@@ -640,7 +652,7 @@
     async function setCachedProfileStatus(profileSlug, action, source) {
         profileStatusBySlug.set(profileSlug, {
             action,
-            source: source === "profile-fetch" ? "profile-cache" : source,
+            source,
             expiresAt: Date.now() + PROFILE_STATUS_CACHE_TTL_MS
         });
         await persistProfileStatusCache();

@@ -30,6 +30,7 @@ This makes LinkedIn group member lists more useful for outreach and triage on pa
 - Listens to live LinkedIn page Voyager responses and applies a best-effort `Pending` state when relationship data or resolved invitation metadata is already present there.
 - Scans LinkedIn's embedded page JSON on first load, so `Pending` can appear immediately even when the relationship data was rendered into the initial HTML instead of arriving through a later XHR.
 - Falls back to a same-origin fetch of the profile HTML document for visible non-`1st` cards when the group page does not expose enough invitation metadata.
+- Prefers the explicit profile invitation state from LinkedIn's HTML over hidden withdraw templates, so a real `Connect` state is not upgraded to `Pending` by mistake.
 - Randomizes profile status checks between `1` and `10000` ms per profile to avoid a burst of identical requests.
 - Stores `Pending` in cache immediately after a successful `Connect` flow.
 - Stores `Pending` in cache for profiles listed on `https://www.linkedin.com/mynetwork/invitation-manager/sent/`.
@@ -49,7 +50,7 @@ On group member pages it:
 6. Listens to LinkedIn's own `fetch` and `XHR` responses on the current page.
 7. Scans LinkedIn's embedded code-block JSON on first load and also parses later network responses.
 8. If LinkedIn exposes invitation metadata for the same profile slug, updates the button to `Pending` immediately.
-9. If the current page still has no pending hint, fetches `/in/{slug}/`, parses the embedded relationship state from the returned HTML, and caches the result for 6 hours.
+9. If the current page still has no pending hint, fetches `/in/{slug}/`, prefers the explicit invitation state from the returned HTML, and caches the result for 6 hours.
 10. On click, opens LinkedIn's invite preload flow in a hidden same-origin iframe and attempts to trigger `Send without a note` inside that hidden invite flow.
 11. If the invite succeeds or LinkedIn says the invite is already pending, updates the button and cache to `Pending`.
 

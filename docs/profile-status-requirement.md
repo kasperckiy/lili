@@ -8,6 +8,7 @@ Show the correct relationship action for LinkedIn group members when the group m
 
 - Use the LinkedIn profile document response from `/in/{slug}/` as the fallback source.
 - Parse the returned HTML for the embedded invitation relationship markers that indicate `Pending`.
+- When the profile HTML includes an explicit invitation state such as `Connect` or `Pending`, that explicit state must win over hidden withdraw-modal templates or other non-primary UI fragments.
 - Continue trusting LinkedIn group-page embedded data and live network hints first when they already provide `Pending`.
 
 ## Required behavior
