@@ -157,7 +157,19 @@
     async function clearStatusCache() {
         try {
             if (chrome.storage?.local) {
-                await chrome.storage.local.remove([PROFILE_STATUS_CACHE_KEY]);
+                await new Promise((resolve, reject) => {
+                    chrome.storage.local.remove([PROFILE_STATUS_CACHE_KEY], () => {
+                        const error = chrome.runtime?.lastError;
+                        if (error) {
+                            reject(new Error(error.message));
+                            return;
+                        }
+
+                        resolve();
+                    });
+                });
+            } else {
+                window.localStorage.removeItem(PROFILE_STATUS_CACHE_KEY);
             }
             lastRuntimeSnapshot = null;
             await loadRuntimeStats();
@@ -352,17 +364,7 @@
     function createEmptyFailureCounts() {
         return {
             challenge: 0,
-            await new Promise((resolve, reject) => {
-                chrome.storage.local.remove([PROFILE_STATUS_CACHE_KEY], () => {
-                    const error = chrome.runtime?.lastError;
-                    if (error) {
-                        reject(new Error(error.message));
-                        return;
-                    }
-
-                    resolve();
-                });
-            });
+            "rate-limit": 0,
             timeout: 0,
             forbidden: 0,
             server: 0,
