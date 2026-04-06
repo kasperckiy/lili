@@ -1,0 +1,26 @@
+{
+    "manifest_version": 3,
+    "name": "LinkedIn Group Priority Actions",
+    "version": "0.1.0",
+    "description": "Replaces the default Message button on LinkedIn group member cards with Connect or Pending when available.",
+    "permissions": [
+        "storage"
+    ],
+    "host_permissions": [
+        "https://www.linkedin.com/*"
+    ],
+    "content_scripts": [
+        {
+            "matches": [
+                "https://www.linkedin.com/groups/*/members/*"
+            ],
+            "js": [
+                "content.js"
+            ],
+            "css": [
+                "content.css"
+            ],
+            "run_at": "document_idle"
+        }
+    ]
+}

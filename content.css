@@ -1,0 +1,39 @@
+.lili-priority-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    text-decoration: none;
+}
+
+.lili-priority-action:hover,
+.lili-priority-action:focus,
+.lili-priority-action:active {
+    text-decoration: none;
+}
+
+.lili-priority-action .artdeco-button__text {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.lili-priority-action--connect {
+    background-color: #0a66c2;
+    border-color: #0a66c2;
+    color: #ffffff;
+}
+
+.lili-priority-action--connect:hover,
+.lili-priority-action--connect:focus {
+    background-color: #004182;
+    border-color: #004182;
+    color: #ffffff;
+}
+
+.lili-priority-action--pending {
+    border-style: dashed;
+}
+
+.lili-priority-action--loading {
+    opacity: 0.7;
+}
