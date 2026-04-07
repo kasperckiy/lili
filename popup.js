@@ -26,7 +26,7 @@
     async function loadPendingCache() {
         try {
             const cacheValue = await readPendingCache();
-            const pendingCount = countValidPendingEntries(cacheValue, Date.now());
+            const pendingCount = countValidPendingEntries(cacheValue);
             if (cacheEntryNode) {
                 cacheEntryNode.textContent = String(pendingCount);
             }
@@ -100,14 +100,14 @@
         }
     }
 
-    function countValidPendingEntries(cacheValue, now) {
+    function countValidPendingEntries(cacheValue) {
         if (!cacheValue || typeof cacheValue !== "object") {
             return 0;
         }
 
         let count = 0;
         for (const record of Object.values(cacheValue)) {
-            if (isValidPendingRecord(record, now)) {
+            if (isValidPendingRecord(record)) {
                 count += 1;
             }
         }
@@ -115,11 +115,9 @@
         return count;
     }
 
-    function isValidPendingRecord(record, now) {
+    function isValidPendingRecord(record) {
         return Boolean(record)
-            && record.action === "pending"
-            && Number.isFinite(record.expiresAt)
-            && record.expiresAt > now;
+            && record.action === "pending";
     }
 
     function startUpdatedTicker() {

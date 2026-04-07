@@ -19,7 +19,7 @@ Show the correct relationship action for LinkedIn group members using only live 
 3. When there is no pending evidence, unresolved non-`1st` members must render `Connect` immediately.
 4. The extension must not show a loading state for passive background status resolution on the group members page.
 5. The extension must not start automatic queue-based or worker-based profile status requests while the user browses the group members list.
-6. The shared cache must store only confirmed `Pending` entries for `24` hours.
+6. The shared cache must store only confirmed `Pending` entries.
 7. `Connect` must be the implicit default when no valid pending entry exists.
 8. If the user clicks `Connect` and LinkedIn accepts the invite flow, store `Pending` in cache immediately.
 9. If LinkedIn reports an already-existing invitation during the invite flow, store `Pending` in cache immediately.
@@ -28,9 +28,10 @@ Show the correct relationship action for LinkedIn group members using only live 
 12. If LinkedIn appends more sent invitations to that page, repeat the cache sync for the newly visible profiles.
 13. If the user opens a concrete profile page at `https://www.linkedin.com/in/{slug}/`, update the shared cache from that already loaded profile page.
 14. If the opened concrete profile page explicitly shows `Connect` instead of `Pending`, any stale pending cache entry for that slug must be cleared.
-15. Cache updates from concrete profile pages and from the sent invitations page must propagate to other open extension tabs through shared storage updates.
-16. The generated `Connect` action must call LinkedIn's invitation API directly and must not depend on a hidden invite iframe.
-17. The popup must show the shared pending-cache count and a clear-cache action, not scheduler controls.
+15. If a cached member appears as `1st` degree on the group members page, any stale pending cache entry for that slug must be cleared.
+16. Cache updates from concrete profile pages and from the sent invitations page must propagate to other open extension tabs through shared storage updates.
+17. The generated `Connect` action must call LinkedIn's invitation API directly and must not depend on a hidden invite iframe.
+18. The popup must show the shared pending-cache count and a clear-cache action, not scheduler controls.
 
 ## UX notes
 

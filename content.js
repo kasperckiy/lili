@@ -16,7 +16,6 @@
     const INVITE_API_PATH = "/voyager/api/voyagerRelationshipsDashMemberRelationships?action=verifyQuotaAndCreateV2&decorationId=com.linkedin.voyager.dash.deco.relationships.InvitationCreationResultWithInvitee-2";
     const PROFILE_FETCH_TIMEOUT_MS = 15000;
     const PROFILE_STATUS_CACHE_KEY = "lili-profile-status-cache-v2";
-    const PROFILE_STATUS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
     const PROFILE_PAGE_SYNC_DEBOUNCE_MS = 250;
     const SENT_INVITATIONS_SYNC_DEBOUNCE_MS = 250;
     const ROUTE_WATCH_INTERVAL_MS = 500;
@@ -570,7 +569,6 @@
 
         const profileUrl = getCardProfileUrl(card);
         const profileSlug = getProfileSlug(profileUrl);
-        const connectionDegree = getConnectionDegree(card);
         if (!profileUrl || !profileSlug) {
             return;
         }
@@ -597,6 +595,10 @@
 
         const connectionDegree = getConnectionDegree(card);
         if (connectionDegree === "1st") {
+            if (applyConnectStatus(profileSlug, "group-members", "")) {
+                void persistProfileStatusCache();
+            }
+
             card.dataset.liliPriorityApplied = "message";
             return;
         }
@@ -718,11 +720,9 @@
             return;
         }
 
-        const nextExpiresAt = Date.now() + PROFILE_STATUS_CACHE_TTL_MS;
         profileStatusBySlug.set(profileSlug, {
             action: existingCache.action,
             source: existingCache.source || source,
-            expiresAt: Math.max(existingCache?.expiresAt || 0, nextExpiresAt),
             profileUrn: normalizedProfileUrn
         });
 
@@ -1135,18 +1135,7 @@
     }
 
     function getCachedProfileStatus(profileSlug) {
-        const record = profileStatusBySlug.get(profileSlug);
-        if (!record) {
-            return null;
-        }
-
-        if (!Number.isFinite(record.expiresAt) || record.expiresAt <= Date.now()) {
-            profileStatusBySlug.delete(profileSlug);
-            void persistProfileStatusCache();
-            return null;
-        }
-
-        return record;
+        return profileStatusBySlug.get(profileSlug) || null;
     }
 
     function setPendingStatus(profileSlug, source, profileUrn) {
@@ -1159,15 +1148,12 @@
         const existingHint = relationshipHints.get(profileSlug);
         const existingCache = getCachedProfileStatus(profileSlug);
         const cachedSource = source;
-        const nextExpiresAt = Date.now() + PROFILE_STATUS_CACHE_TTL_MS;
         const nextProfileUrn = profileUrn || existingCache?.profileUrn || "";
         const didChange = existingHint?.action !== "pending"
             || existingHint?.source !== source
             || existingCache?.action !== "pending"
             || existingCache?.source !== cachedSource
-            || (existingCache?.profileUrn || "") !== nextProfileUrn
-            || !Number.isFinite(existingCache?.expiresAt)
-            || existingCache.expiresAt <= Date.now();
+            || (existingCache?.profileUrn || "") !== nextProfileUrn;
 
         relationshipHints.set(profileSlug, {
             action: "pending",
@@ -1177,7 +1163,6 @@
         profileStatusBySlug.set(profileSlug, {
             action: "pending",
             source: cachedSource,
-            expiresAt: nextExpiresAt,
             profileUrn: nextProfileUrn
         });
 
@@ -1226,12 +1211,11 @@
     }
 
     function replaceProfileStatusCache(storedCache) {
-        const now = Date.now();
         const nextRecords = new Map();
         let didPrune = false;
 
         for (const [profileSlug, record] of Object.entries(storedCache || {})) {
-            if (!isValidProfileStatusRecord(record, now)) {
+            if (!isValidProfileStatusRecord(record)) {
                 didPrune = true;
                 continue;
             }
@@ -1239,7 +1223,6 @@
             nextRecords.set(profileSlug, {
                 action: "pending",
                 source: record.source || "profile-cache",
-                expiresAt: record.expiresAt,
                 profileUrn: typeof record.profileUrn === "string" ? record.profileUrn : ""
             });
         }
@@ -1284,11 +1267,9 @@
         });
     }
 
-    function isValidProfileStatusRecord(record, now) {
+    function isValidProfileStatusRecord(record) {
         return Boolean(record)
-            && record.action === "pending"
-            && Number.isFinite(record.expiresAt)
-            && record.expiresAt > now;
+            && record.action === "pending";
     }
 
     function rerenderAllCards() {
@@ -1300,14 +1281,13 @@
     async function persistProfileStatusCache() {
         const payload = {};
         for (const [profileSlug, record] of profileStatusBySlug.entries()) {
-            if (!isValidProfileStatusRecord(record, Date.now())) {
+            if (!isValidProfileStatusRecord(record)) {
                 continue;
             }
 
             payload[profileSlug] = {
                 action: "pending",
                 source: record.source || "profile-cache",
-                expiresAt: record.expiresAt,
                 profileUrn: typeof record.profileUrn === "string" ? record.profileUrn : ""
             };
         }
