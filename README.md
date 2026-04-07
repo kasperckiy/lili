@@ -29,6 +29,12 @@ LiLi currently works with three LinkedIn page types:
 2. Concrete profile pages such as `https://www.linkedin.com/in/{slug}/`.
 3. Sent invitations page at `https://www.linkedin.com/mynetwork/invitation-manager/sent/`.
 
+### Recommended First-Use Flow
+
+For the best initial results, first open the sent invitations page at `https://www.linkedin.com/mynetwork/invitation-manager/sent/` so LiLi can fill the shared pending cache from the visible invitations there.
+
+After that, navigate to the members page of the group you want to work with. LiLi will then reuse that cached pending state while rendering the group member list.
+
 ### How Status Resolution Works
 
 On group member pages, LiLi resolves actions in this order:
@@ -97,6 +103,9 @@ Expected behavior:
 Privacy notes:
 
 - LiLi does not send data to external servers.
+- LiLi does not collect, store, or upload any personal information outside the browser or LinkedIn itself.
+- LiLi does not automate outreach, messaging, invitations, or any other LinkedIn workflow on your behalf.
+- LiLi only improves UX by surfacing already available LinkedIn state and reducing manual page switching.
 - All logic runs locally in the browser against the current LinkedIn page.
 - Any on-demand profile request triggered by an explicit `Connect` click is a same-origin LinkedIn request.
 - Cached relationship state stays in extension storage.
@@ -108,7 +117,6 @@ Privacy notes:
 - [popup.html](popup.html): popup UI layout.
 - [popup.js](popup.js): popup cache panel logic.
 - [content.css](content.css): visual tweaks for generated buttons.
-- [docs/profile-status-requirement.md](docs/profile-status-requirement.md): requirement notes for pending-cache resolution.
 
 ### Limitations
 
@@ -136,6 +144,12 @@ Privacy notes:
 1. Страницы участников групп, например `https://www.linkedin.com/groups/123/members/`.
 2. Конкретные страницы профиля, например `https://www.linkedin.com/in/{slug}/`.
 3. Страница отправленных приглашений `https://www.linkedin.com/mynetwork/invitation-manager/sent/`.
+
+### Рекомендуемый первый запуск
+
+Для лучшего стартового результата сначала открой страницу отправленных приглашений `https://www.linkedin.com/mynetwork/invitation-manager/sent/`, чтобы LiLi заполнил общий pending cache по видимым приглашениям.
+
+После этого переходи на страницу участников нужной группы. Тогда LiLi сможет использовать уже собранный pending cache при отрисовке списка участников.
 
 ### Как теперь определяется статус
 
@@ -205,6 +219,9 @@ LiLi должен одинаково обновлять общий pending cache
 Privacy notes:
 
 - LiLi не отправляет данные на внешние серверы.
+- LiLi не собирает, не сохраняет и не выгружает никакую персональную информацию за пределы браузера или самого LinkedIn.
+- LiLi не автоматизирует outreach, messaging, invitations или любые другие процессы в LinkedIn от имени пользователя.
+- LiLi только улучшает UX: показывает уже доступный статус LinkedIn и уменьшает количество ручных переходов между страницами.
 - Вся логика работает локально в браузере поверх текущей LinkedIn page.
 - Любой on-demand profile request, который выполняется после явного клика по `Connect`, остается same-origin запросом к LinkedIn.
 - Кеш состояния отношений хранится только в extension storage.
@@ -216,7 +233,6 @@ Privacy notes:
 - [popup.html](popup.html): layout popup.
 - [popup.js](popup.js): логика popup-панели pending cache.
 - [content.css](content.css): визуальные правки для создаваемых кнопок.
-- [docs/profile-status-requirement.md](docs/profile-status-requirement.md): requirement notes для pending-cache resolution.
 
 ### Ограничения
 

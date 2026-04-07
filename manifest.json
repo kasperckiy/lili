@@ -2,7 +2,7 @@
     "manifest_version": 3,
     "name": "LinkedIn Group Priority Actions",
     "short_name": "LiLi",
-    "version": "0.11.3",
+    "version": "0.11.4",
     "description": "Surfaces Connect or Pending on LinkedIn group member cards, syncs pending state from supported LinkedIn pages, and uses direct LinkedIn invite API calls when needed.",
     "minimum_chrome_version": "114",
     "homepage_url": "https://github.com/kasperckiy/lili",
