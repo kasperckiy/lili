@@ -12,7 +12,7 @@ LiLi is a Chrome extension for LinkedIn group member pages. It keeps LinkedIn's 
 
 ### Overview
 
-LiLi helps you review LinkedIn group member lists faster.
+LiLi helps you review LinkedIn group member lists faster and send connect requests from the same flow.
 
 - Keeps LinkedIn's native `Message` action for `1st` degree connections.
 - Shows `Pending` when LinkedIn already exposes invitation state.
@@ -119,7 +119,7 @@ In practice:
 
 ### Обзор
 
-LiLi помогает быстрее просматривать списки участников групп в LinkedIn.
+LiLi помогает быстрее просматривать списки участников групп в LinkedIn и отправлять запросы на коннект из того же сценария.
 
 - Сохраняет нативный `Message` для `1st` degree connections.
 - Показывает `Pending`, когда LinkedIn уже отдает подтвержденный invitation state.
