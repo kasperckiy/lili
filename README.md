@@ -12,7 +12,7 @@ LiLi is a Chrome extension for LinkedIn that simplifies group member pages: it k
 
 ### What LiLi Does
 
-LiLi follows a deliberately simple model.
+LiLi works on LinkedIn group member pages with the following behavior.
 
 - Keeps LinkedIn's native `Message` action untouched for `1st` degree connections.
 - Shows `Pending` when LinkedIn page data, the sent invitations page, the opened profile page, or the invite flow itself confirms an existing invitation.
@@ -128,7 +128,7 @@ Privacy notes:
 
 ### Что делает LiLi
 
-LiLi работает по упрощенной и предсказуемой модели.
+LiLi работает на страницах участников LinkedIn со следующим поведением.
 
 - Сохраняет нативный `Message` для `1st` degree connections.
 - Показывает `Pending`, когда LinkedIn уже подтвердил существующее приглашение через данные страницы, sent invitations, открытую profile page или сам invite flow.
