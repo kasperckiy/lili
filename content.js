@@ -331,8 +331,9 @@
 
     function observeDocumentBodies(observer, targetDocuments) {
         targetDocuments.forEach((targetDocument) => {
-            if (targetDocument?.body) {
-                observer.observe(targetDocument.body, { childList: true, subtree: true });
+            const observationRoot = targetDocument?.body || targetDocument?.documentElement;
+            if (observationRoot) {
+                observer.observe(observationRoot, { childList: true, subtree: true });
             }
         });
     }
