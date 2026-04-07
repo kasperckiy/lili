@@ -12,204 +12,43 @@
     <main class="popup-shell">
         <header class="popup-header">
             <p class="eyebrow">LiLi</p>
-            <h1>Profile Fetch Scheduler</h1>
-            <p class="subtitle">Tune how fallback LinkedIn profile checks are queued and throttled.</p>
+            <h1>Pending Cache</h1>
+            <p class="subtitle">LiLi now keeps only shared pending-invite state and leaves unresolved members at
+                Connect.</p>
         </header>
 
         <section class="runtime-panel" aria-live="polite">
             <div class="runtime-header">
                 <div>
-                    <p class="runtime-eyebrow">Live Queue</p>
-                    <h2>Queue and cache right now</h2>
+                    <p class="runtime-eyebrow">Shared State</p>
+                    <h2>Pending cache right now</h2>
                 </div>
                 <p id="runtime-updated" class="runtime-updated">Waiting for data</p>
             </div>
 
             <div class="runtime-grid">
-                <div class="runtime-stat">
-                    <span class="runtime-label">Queued</span>
-                    <strong id="runtime-queued-count">0</strong>
-                </div>
-
-                <div class="runtime-stat">
-                    <span class="runtime-label">Active</span>
-                    <strong id="runtime-active-count">0</strong>
-                </div>
-
-                <div class="runtime-stat">
-                    <span class="runtime-label">Tabs</span>
-                    <strong id="runtime-tab-count">0</strong>
-                </div>
-
-                <div class="runtime-stat">
-                    <span class="runtime-label">Checks OK</span>
-                    <strong id="runtime-successful-check-count">0</strong>
-                </div>
-
                 <div class="runtime-stat runtime-stat--wide">
-                    <span class="runtime-label">Cache entries</span>
+                    <span class="runtime-label">Pending entries</span>
                     <strong id="runtime-cache-entry-count">0</strong>
                 </div>
             </div>
 
-            <p id="runtime-meta" class="runtime-meta">Open a LinkedIn group members tab to see live queue stats.</p>
-
-            <div class="runtime-debug-grid">
-                <div class="runtime-debug-card">
-                    <p class="runtime-debug-title">Wait Gates</p>
-                    <div class="runtime-debug-list">
-                        <div class="runtime-debug-row"><span>Queue gate</span><strong
-                                id="runtime-wait-gate">none</strong></div>
-                        <div class="runtime-debug-row"><span>Earliest worker gap</span><strong
-                                id="runtime-gap-wait">0s</strong></div>
-                        <div class="runtime-debug-row"><span>Cooldown remaining</span><strong
-                                id="runtime-cooldown-wait">0s</strong></div>
-                        <div class="runtime-debug-row"><span>Idle remaining</span><strong
-                                id="runtime-idle-wait">0s</strong></div>
-                        <div class="runtime-debug-row"><span>Budget remaining</span><strong
-                                id="runtime-budget-wait">0s</strong></div>
-                        <div class="runtime-debug-row"><span>Next drain</span><strong id="runtime-next-drain">not
-                                scheduled</strong></div>
-                    </div>
-                </div>
-
-                <div class="runtime-debug-card">
-                    <p class="runtime-debug-title">Scheduler State</p>
-                    <div class="runtime-debug-list">
-                        <div class="runtime-debug-row"><span>Busy workers</span><strong id="runtime-scheduler-jobs">0
-                                / 0</strong></div>
-                        <div class="runtime-debug-row"><span>Oldest queued</span><strong
-                                id="runtime-oldest-queued">0s</strong></div>
-                        <div class="runtime-debug-row"><span>Recent starts</span><strong id="runtime-recent-starts">0 /
-                                0</strong></div>
-                        <div class="runtime-debug-row"><span>Failure streak</span><strong
-                                id="runtime-failure-count">0</strong></div>
-                        <div class="runtime-debug-row"><span>Failed total</span><strong
-                                id="runtime-failed-total">0</strong></div>
-                        <div class="runtime-debug-row"><span>Leases</span><strong id="runtime-lease-count">0</strong>
-                        </div>
-                        <div class="runtime-debug-row"><span>Last failure</span><strong
-                                id="runtime-last-failure">none</strong></div>
-                        <div class="runtime-debug-row"><span>Last check OK</span><strong
-                                id="runtime-last-success">never</strong></div>
-                    </div>
-                </div>
-
-                <div class="runtime-debug-card runtime-debug-card--full">
-                    <p class="runtime-debug-title">Failure Breakdown</p>
-                    <div class="runtime-debug-list runtime-debug-list--two">
-                        <div class="runtime-debug-row"><span>Challenge</span><strong
-                                id="runtime-failure-challenge">0</strong></div>
-                        <div class="runtime-debug-row"><span>Rate limit</span><strong
-                                id="runtime-failure-rate-limit">0</strong></div>
-                        <div class="runtime-debug-row"><span>Timeout</span><strong
-                                id="runtime-failure-timeout">0</strong></div>
-                        <div class="runtime-debug-row"><span>Forbidden</span><strong
-                                id="runtime-failure-forbidden">0</strong></div>
-                        <div class="runtime-debug-row"><span>Server</span><strong id="runtime-failure-server">0</strong>
-                        </div>
-                        <div class="runtime-debug-row"><span>Parse</span><strong id="runtime-failure-parse">0</strong>
-                        </div>
-                        <div class="runtime-debug-row"><span>Other</span><strong id="runtime-failure-other">0</strong>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="runtime-debug-card runtime-debug-card--full">
-                    <p class="runtime-debug-title">Effective Settings</p>
-                    <div class="runtime-debug-list runtime-debug-list--three">
-                        <div class="runtime-debug-row"><span>Workers</span><strong
-                                id="runtime-setting-worker-count">0</strong></div>
-                        <div class="runtime-debug-row"><span>Per-worker gap</span><strong
-                                id="runtime-setting-base-gap">0s</strong></div>
-                        <div class="runtime-debug-row"><span>Per-worker jitter</span><strong
-                                id="runtime-setting-jitter">0s-0s</strong></div>
-                        <div class="runtime-debug-row"><span>Shared scroll idle</span><strong
-                                id="runtime-setting-scroll-idle">0s</strong></div>
-                        <div class="runtime-debug-row"><span>Shared rolling budget</span><strong
-                                id="runtime-setting-budget">0
-                                / 0</strong></div>
-                        <div class="runtime-debug-row"><span>Shared backoff cap</span><strong
-                                id="runtime-setting-backoff-cap">0s</strong></div>
-                    </div>
-                </div>
-            </div>
+            <p id="runtime-meta" class="runtime-meta">Shared across supported LinkedIn pages: group members, concrete
+                profile pages, and sent invitations.</p>
         </section>
 
-        <form id="settings-form" class="settings-form">
-            <label class="field">
-                <span>Workers</span>
-                <input id="workerCount" name="workerCount" type="number" min="1" step="1" inputmode="numeric"
-                    aria-describedby="worker-count-help">
-                <small id="worker-count-help" class="field-help">How many independent fallback fetch workers may pull
-                    from the shared queue inside this tab.</small>
-            </label>
-
-            <label class="field">
-                <span>Per-worker gap, ms</span>
-                <input id="baseGapMs" name="baseGapMs" type="number" min="0" step="100" inputmode="numeric"
-                    aria-describedby="base-gap-help">
-                <small id="base-gap-help" class="field-help">Minimum wait before the same worker may start its next
-                    fallback fetch.</small>
-            </label>
-
-            <div class="field-group">
-                <label class="field">
-                    <span>Per-worker jitter min, ms</span>
-                    <input id="jitterMinMs" name="jitterMinMs" type="number" min="0" step="100" inputmode="numeric"
-                        aria-describedby="jitter-min-help">
-                    <small id="jitter-min-help" class="field-help">Lower bound of the random delay added to one
-                        worker before it may start again.</small>
-                </label>
-
-                <label class="field">
-                    <span>Per-worker jitter max, ms</span>
-                    <input id="jitterMaxMs" name="jitterMaxMs" type="number" min="0" step="100" inputmode="numeric"
-                        aria-describedby="jitter-max-help">
-                    <small id="jitter-max-help" class="field-help">Upper bound of the random delay added before that
-                        worker may start the next fetch.</small>
-                </label>
+        <section class="settings-form">
+            <p class="runtime-debug-title">Supported Behavior</p>
+            <div class="runtime-debug-list">
+                <div class="runtime-debug-row"><span>`1st` degree on group pages</span><strong>Keep Message</strong>
+                </div>
+                <div class="runtime-debug-row"><span>Known invite state</span><strong>Show Pending</strong></div>
+                <div class="runtime-debug-row"><span>Unresolved non-`1st` member</span><strong>Show Connect</strong>
+                </div>
             </div>
-
-            <label class="field">
-                <span>Shared scroll idle, ms</span>
-                <input id="scrollIdleMs" name="scrollIdleMs" type="number" min="0" step="100" inputmode="numeric"
-                    aria-describedby="scroll-idle-help">
-                <small id="scroll-idle-help" class="field-help">How long the page should stay still before low-priority
-                    fallback fetches may start across the shared queue.</small>
-            </label>
-
-            <div class="field-group">
-                <label class="field">
-                    <span>Shared rolling budget, fetches</span>
-                    <input id="rollingBudgetMax" name="rollingBudgetMax" type="number" min="1" step="1"
-                        inputmode="numeric" aria-describedby="rolling-budget-help">
-                    <small id="rolling-budget-help" class="field-help">Maximum number of fallback fetch starts allowed
-                        across all workers inside the rolling window.</small>
-                </label>
-
-                <label class="field">
-                    <span>Rolling window, minutes</span>
-                    <input id="rollingWindowMinutes" name="rollingWindowMinutes" type="number" min="1" step="1"
-                        inputmode="numeric" aria-describedby="rolling-window-help">
-                    <small id="rolling-window-help" class="field-help">Time window used when enforcing the rolling
-                        request budget.</small>
-                </label>
-            </div>
-
-            <label class="field">
-                <span>Shared backoff cap, minutes</span>
-                <input id="backoffCapMinutes" name="backoffCapMinutes" type="number" min="1" step="1"
-                    inputmode="numeric" aria-describedby="backoff-cap-help">
-                <small id="backoff-cap-help" class="field-help">Maximum cooldown after protection-like failures such as
-                    rate limits or challenge pages across the shared scheduler.</small>
-            </label>
-
-            <div class="actions">
-                <button id="save-button" type="submit" class="primary-action">Save</button>
-                <button id="reset-button" type="button" class="secondary-action">Reset defaults</button>
-            </div>
-        </form>
+            <p class="runtime-meta">The extension no longer runs automatic background profile checks while you browse
+                the group members list.</p>
+        </section>
 
         <p id="status" class="status" aria-live="polite"></p>
 
@@ -219,7 +58,6 @@
         </button>
     </main>
 
-    <script src="profile-fetch-settings.js"></script>
     <script src="popup.js"></script>
 </body>
 

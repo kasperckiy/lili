@@ -9,7 +9,7 @@
     const PRELOAD_FRAME_SELECTOR = "iframe[src*='/preload/']";
     const DEGREE_SELECTOR = ".artdeco-entity-lockup__degree";
     const NAME_SELECTOR = ".entity-action-title";
-    const ACTION_SELECTOR = ".entry-point .lili-connect-action, .entry-point .lili-pending-action, .entry-point .lili-sending-action, .entry-point .lili-loading-action, .entry-point button.artdeco-button[aria-label*='Message'], .entry-point a[aria-label*='Message']";
+    const ACTION_SELECTOR = ".entry-point .lili-connect-action, .entry-point .lili-pending-action, .entry-point .lili-sending-action, .entry-point button.artdeco-button[aria-label*='Message'], .entry-point a[aria-label*='Message']";
     const OBSERVER_MARGIN_PX = 300;
     const OBSERVER_MARGIN = `${OBSERVER_MARGIN_PX}px`;
     const NETWORK_HINT_EVENT = "lili:relationship-hints";
@@ -48,8 +48,8 @@
     const profileFetchSettingsState = createProfileFetchSettingsState();
     const profileFetchSchedulerState = createProfileFetchSchedulerState();
     const profileStatusCacheReady = loadProfileStatusCache();
-    const profileFetchSettingsReady = loadProfileFetchSettings();
-    const profileFetchSchedulerReady = loadProfileFetchSchedulerState();
+    const profileFetchSettingsReady = Promise.resolve();
+    const profileFetchSchedulerReady = Promise.resolve();
     const profilePageSyncState = {
         timeoutId: 0,
         observer: null,
@@ -202,7 +202,6 @@
             mutationObserver.disconnect();
             pageLifecycleState.groupMembersObservedDocumentsKey = "";
             setNetworkHintTargetWindows([]);
-            void clearProfileFetchRuntimeStats();
         }
 
         if (nextMode === "group-members") {
@@ -221,10 +220,7 @@
     }
 
     function activateGroupMembersPage(targetDocuments = getActivePageDocuments("group-members")) {
-        if (!pageLifecycleState.groupMembersInitialized) {
-            pageLifecycleState.groupMembersInitialized = true;
-            initializeProfileFetchScheduler();
-        }
+        pageLifecycleState.groupMembersInitialized = true;
 
         const documentsKey = getPageDocumentsKey(targetDocuments);
         targetDocuments.forEach((targetDocument) => {
@@ -241,8 +237,6 @@
         targetDocuments.forEach((targetDocument) => {
             scanCards(targetDocument);
         });
-        scheduleProfileFetchQueueDrain();
-        scheduleProfileFetchRuntimeStatsPublish();
     }
 
     function getActivePageDocument(mode = pageLifecycleState.currentMode) {
@@ -604,11 +598,7 @@
     }
 
     function scheduleProfileFetchRuntimeStatsPublish(delayMs = 0) {
-        window.clearTimeout(profileFetchSchedulerState.runtimeStatsTimerId);
-        profileFetchSchedulerState.runtimeStatsTimerId = window.setTimeout(() => {
-            profileFetchSchedulerState.runtimeStatsTimerId = 0;
-            void publishProfileFetchRuntimeStats();
-        }, Math.max(0, delayMs));
+        void delayMs;
     }
 
     async function publishProfileFetchRuntimeStats() {
@@ -729,12 +719,10 @@
 
     function beginTrackedRuntimeRequest() {
         profileFetchSchedulerState.activeRequestCount += 1;
-        scheduleProfileFetchRuntimeStatsPublish();
     }
 
     function endTrackedRuntimeRequest() {
         profileFetchSchedulerState.activeRequestCount = Math.max(0, profileFetchSchedulerState.activeRequestCount - 1);
-        scheduleProfileFetchRuntimeStatsPublish();
     }
 
     function handleProfileFetchPageHide() {
@@ -925,18 +913,13 @@
 
         const inviteState = inviteStateBySlug.get(profileSlug)?.action;
         const profileStatus = getCachedProfileStatus(profileSlug)?.action || "";
-        const probeStatus = profileProbeStateBySlug.get(profileSlug)?.status || "";
         const desiredAction = relationshipHints.get(profileSlug)?.action === "pending"
             ? "pending"
             : inviteState === "sending"
                 ? "sending"
                 : profileStatus === "pending"
                     ? "pending"
-                    : profileStatus === "connect"
-                        ? "connect"
-                        : probeStatus === "loading"
-                            ? "loading"
-                            : "connect";
+                    : "connect";
 
         if (currentAction.dataset.liliPriorityAction === desiredAction) {
             card.dataset.liliPriorityApplied = desiredAction;
@@ -1037,14 +1020,18 @@
         }
 
         const existingCache = getCachedProfileStatus(profileSlug);
+        if (!existingCache) {
+            return;
+        }
+
         if (existingCache?.profileUrn === normalizedProfileUrn) {
             return;
         }
 
         const nextExpiresAt = Date.now() + PROFILE_STATUS_CACHE_TTL_MS;
         profileStatusBySlug.set(profileSlug, {
-            action: existingCache?.action || "connect",
-            source: existingCache?.source || source,
+            action: existingCache.action,
+            source: existingCache.source || source,
             expiresAt: Math.max(existingCache?.expiresAt || 0, nextExpiresAt),
             profileUrn: normalizedProfileUrn
         });
@@ -1117,12 +1104,8 @@
                 || "network";
         }
 
-        if (actionKind === "loading") {
-            return "profile-fetch";
-        }
-
         if (actionKind === "connect") {
-            return profileStatusBySlug.get(profileSlug)?.source || "profile-fetch";
+            return "group-members";
         }
 
         return "invite-flow";
@@ -1131,9 +1114,11 @@
     function getPendingTitle(source) {
         return source === "profile-fetch" || source === "profile-cache"
             ? "Pending invitation confirmed from the LinkedIn profile document"
-            : source === "sent-invitations"
-                ? "Pending invitation confirmed from LinkedIn sent invitations"
-                : "Pending invitation detected from LinkedIn page data";
+            : source === "profile-page"
+                ? "Pending invitation confirmed from the opened LinkedIn profile page"
+                : source === "sent-invitations"
+                    ? "Pending invitation confirmed from LinkedIn sent invitations"
+                    : "Pending invitation detected from LinkedIn page data";
     }
 
     function buildActionClassName(currentAction, actionKind) {
@@ -1471,25 +1456,8 @@
     }
 
     function primeProfileStatus(profileSlug, connectionDegree) {
-        if (!profileSlug || connectionDegree === "1st") {
-            return;
-        }
-
-        if (relationshipHints.get(profileSlug)?.action === "pending" || getCachedProfileStatus(profileSlug)) {
-            return;
-        }
-
-        if (inviteStateBySlug.get(profileSlug)?.action === "sending") {
-            return;
-        }
-
-        const probeStatus = profileProbeStateBySlug.get(profileSlug)?.status;
-        if (probeStatus) {
-            return;
-        }
-
-        profileProbeStateBySlug.set(profileSlug, { status: "loading" });
-        enqueueProfileStatusResolution(profileSlug);
+        void profileSlug;
+        void connectionDegree;
     }
 
     async function sendInviteWithoutNote(profileSlug) {
@@ -1883,24 +1851,16 @@
     function applyConnectStatus(profileSlug, source, profileUrn) {
         const existingHint = relationshipHints.get(profileSlug);
         const existingCache = getCachedProfileStatus(profileSlug);
-        const nextExpiresAt = Date.now() + PROFILE_STATUS_CACHE_TTL_MS;
-        const nextProfileUrn = profileUrn || existingCache?.profileUrn || "";
         const didChange = Boolean(existingHint)
-            || existingCache?.action !== "connect"
-            || existingCache?.source !== source
-            || (existingCache?.profileUrn || "") !== nextProfileUrn
-            || !Number.isFinite(existingCache?.expiresAt)
-            || existingCache.expiresAt <= Date.now();
+            || Boolean(existingCache);
 
         relationshipHints.delete(profileSlug);
         inviteStateBySlug.delete(profileSlug);
         profileProbeStateBySlug.delete(profileSlug);
-        profileStatusBySlug.set(profileSlug, {
-            action: "connect",
-            source,
-            expiresAt: nextExpiresAt,
-            profileUrn: nextProfileUrn
-        });
+        profileStatusBySlug.delete(profileSlug);
+
+        void source;
+        void profileUrn;
 
         return didChange;
     }
@@ -1942,7 +1902,7 @@
             }
 
             nextRecords.set(profileSlug, {
-                action: record.action,
+                action: "pending",
                 source: record.source || "profile-cache",
                 expiresAt: record.expiresAt,
                 profileUrn: typeof record.profileUrn === "string" ? record.profileUrn : ""
@@ -2165,7 +2125,7 @@
 
     function isValidProfileStatusRecord(record, now) {
         return Boolean(record)
-            && (record.action === "pending" || record.action === "connect")
+            && record.action === "pending"
             && Number.isFinite(record.expiresAt)
             && record.expiresAt > now;
     }
@@ -2184,7 +2144,7 @@
             }
 
             payload[profileSlug] = {
-                action: record.action,
+                action: "pending",
                 source: record.source || "profile-cache",
                 expiresAt: record.expiresAt,
                 profileUrn: typeof record.profileUrn === "string" ? record.profileUrn : ""
