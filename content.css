@@ -1,7 +1,6 @@
 .lili-connect-action,
 .lili-sending-action,
-.lili-pending-action,
-.lili-loading-action {
+.lili-pending-action {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -16,9 +15,6 @@
 .lili-sending-action:hover,
 .lili-sending-action:focus,
 .lili-sending-action:active,
-.lili-loading-action:hover,
-.lili-loading-action:focus,
-.lili-loading-action:active,
 .lili-pending-action:hover,
 .lili-pending-action:focus,
 .lili-pending-action:active {
@@ -27,7 +23,6 @@
 
 .lili-connect-action .artdeco-button__text,
 .lili-sending-action .artdeco-button__text,
-.lili-loading-action .artdeco-button__text,
 .lili-pending-action .artdeco-button__text {
     display: inline-flex;
     align-items: center;
@@ -56,41 +51,12 @@
     color: #ffffff;
 }
 
-.lili-loading-action.artdeco-button--primary,
-.lili-loading-action.artdeco-button--primary:hover,
-.lili-loading-action.artdeco-button--primary:focus {
-    background-color: #5b8ec4;
-    border-color: #5b8ec4;
-    color: #ffffff;
-}
-
-.lili-loading-action .artdeco-button__text::before {
-    content: "";
-    width: 0.8rem;
-    height: 0.8rem;
-    border: 2px solid currentColor;
-    border-right-color: transparent;
-    border-radius: 50%;
-    animation: lili-spin 0.8s linear infinite;
-}
-
 .lili-pending-action.artdeco-button--secondary {
     border-style: dashed;
 }
 
 .lili-sending-action[disabled],
-.lili-loading-action[disabled],
 .lili-pending-action[disabled] {
     cursor: default;
     opacity: 1;
-}
-
-@keyframes lili-spin {
-    from {
-        transform: rotate(0deg);
-    }
-
-    to {
-        transform: rotate(360deg);
-    }
 }

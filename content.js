@@ -15,25 +15,7 @@
     const NETWORK_HINT_EVENT = "lili:relationship-hints";
     const INVITE_API_PATH = "/voyager/api/voyagerRelationshipsDashMemberRelationships?action=verifyQuotaAndCreateV2&decorationId=com.linkedin.voyager.dash.deco.relationships.InvitationCreationResultWithInvitee-2";
     const PROFILE_FETCH_TIMEOUT_MS = 15000;
-    const PROFILE_FETCH_BACKOFF_INITIAL_MS = 30000;
-    const PROFILE_FETCH_LEASE_TTL_MS = PROFILE_FETCH_TIMEOUT_MS + 5000;
-    const PROFILE_FETCH_LEASE_RETRY_MIN_MS = 1000;
-    const profileFetchSettingsApi = globalThis.LiliProfileFetchSettings || null;
-    const PROFILE_FETCH_SETTINGS_KEY = profileFetchSettingsApi?.SETTINGS_STORAGE_KEY || "lili-profile-fetch-settings-v1";
-    const PROFILE_FETCH_RUNTIME_KEY_PREFIX = profileFetchSettingsApi?.RUNTIME_STATS_STORAGE_KEY_PREFIX || "lili-profile-fetch-runtime-v1:";
-    const DEFAULT_PROFILE_FETCH_SETTINGS = profileFetchSettingsApi?.DEFAULT_PROFILE_FETCH_SETTINGS || {
-        workerCount: 2,
-        concurrency: 2,
-        baseGapMs: 3000,
-        jitterMinMs: 100,
-        jitterMaxMs: 10000,
-        scrollIdleMs: 1000,
-        rollingBudgetMax: 15,
-        rollingWindowMs: 2 * 60 * 1000,
-        backoffCapMs: 10 * 60 * 1000
-    };
     const PROFILE_STATUS_CACHE_KEY = "lili-profile-status-cache-v2";
-    const PROFILE_FETCH_SCHEDULER_KEY = "lili-profile-fetch-scheduler-v1";
     const PROFILE_STATUS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
     const PROFILE_PAGE_SYNC_DEBOUNCE_MS = 250;
     const SENT_INVITATIONS_SYNC_DEBOUNCE_MS = 250;
@@ -44,12 +26,7 @@
     const cardsBySlug = new Map();
     const inviteStateBySlug = new Map();
     const profileStatusBySlug = new Map();
-    const profileProbeStateBySlug = new Map();
-    const profileFetchSettingsState = createProfileFetchSettingsState();
-    const profileFetchSchedulerState = createProfileFetchSchedulerState();
     const profileStatusCacheReady = loadProfileStatusCache();
-    const profileFetchSettingsReady = Promise.resolve();
-    const profileFetchSchedulerReady = Promise.resolve();
     const profilePageSyncState = {
         timeoutId: 0,
         observer: null,
@@ -462,292 +439,6 @@
         }, SENT_INVITATIONS_SYNC_DEBOUNCE_MS);
     }
 
-    function initializeProfileFetchScheduler() {
-        installProfileFetchSettingsObserver();
-        installProfileFetchSchedulerObserver();
-        window.addEventListener("scroll", handleProfileFetchScroll, { passive: true });
-        window.addEventListener("pagehide", handleProfileFetchPageHide);
-        void profileFetchSettingsReady;
-        void profileFetchSchedulerReady;
-        scheduleProfileFetchRuntimeStatsPublish();
-    }
-
-    function createProfileFetchSettingsState() {
-        return {
-            values: normalizeProfileFetchSettings(DEFAULT_PROFILE_FETCH_SETTINGS)
-        };
-    }
-
-    function createProfileFetchSchedulerState() {
-        return {
-            tabId: createTabInstanceId(),
-            queue: [],
-            jobsBySlug: new Map(),
-            workers: createProfileFetchWorkers(profileFetchSettingsState.values.workerCount),
-            activeRequestCount: 0,
-            successfulCheckCount: 0,
-            lastSuccessfulCheckAt: 0,
-            totalFailedCheckCount: 0,
-            lastFailureCode: "",
-            lastFailureAt: 0,
-            failureCounts: createEmptyProfileFetchFailureCounts(),
-            timerId: 0,
-            scheduledDrainAt: 0,
-            draining: false,
-            runtimeStatsTimerId: 0,
-            lastScrollAt: Date.now(),
-            failureCount: 0,
-            storageMutationPromise: Promise.resolve(),
-            syncedState: createEmptyProfileFetchSchedulerStorageState()
-        };
-    }
-
-    function createProfileFetchWorkers(workerCount) {
-        const normalizedWorkerCount = Math.max(1, Number(workerCount) || 1);
-        const workers = [];
-
-        for (let index = 0; index < normalizedWorkerCount; index += 1) {
-            workers.push(createProfileFetchWorker(index));
-        }
-
-        return workers;
-    }
-
-    function createProfileFetchWorker(index, existingWorker) {
-        return {
-            id: existingWorker?.id || `worker-${index + 1}`,
-            status: existingWorker?.status === "active" ? "active" : "idle",
-            activeProfileSlug: typeof existingWorker?.activeProfileSlug === "string"
-                ? existingWorker.activeProfileSlug
-                : "",
-            nextAllowedStartAt: Number.isFinite(existingWorker?.nextAllowedStartAt)
-                ? existingWorker.nextAllowedStartAt
-                : 0
-        };
-    }
-
-    function reconcileProfileFetchWorkers() {
-        const targetWorkerCount = profileFetchSettingsState.values.workerCount;
-
-        while (profileFetchSchedulerState.workers.length < targetWorkerCount) {
-            profileFetchSchedulerState.workers.push(createProfileFetchWorker(profileFetchSchedulerState.workers.length));
-        }
-
-        trimIdleProfileFetchWorkers();
-    }
-
-    function trimIdleProfileFetchWorkers() {
-        const targetWorkerCount = profileFetchSettingsState.values.workerCount;
-
-        while (profileFetchSchedulerState.workers.length > targetWorkerCount) {
-            const tailWorker = profileFetchSchedulerState.workers[profileFetchSchedulerState.workers.length - 1];
-            if (tailWorker?.status === "active") {
-                break;
-            }
-
-            profileFetchSchedulerState.workers.pop();
-        }
-    }
-
-    function createEmptyProfileFetchSchedulerStorageState() {
-        return {
-            cooldownUntil: 0,
-            recentFetchStarts: [],
-            leases: {}
-        };
-    }
-
-    function createEmptyProfileFetchFailureCounts() {
-        return {
-            challenge: 0,
-            "rate-limit": 0,
-            timeout: 0,
-            forbidden: 0,
-            server: 0,
-            parse: 0,
-            other: 0
-        };
-    }
-
-    function createTabInstanceId() {
-        if (globalThis.crypto?.randomUUID) {
-            return globalThis.crypto.randomUUID();
-        }
-
-        return `lili-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    }
-
-    function handleProfileFetchScroll() {
-        profileFetchSchedulerState.lastScrollAt = Date.now();
-        scheduleProfileFetchQueueDrain(profileFetchSettingsState.values.scrollIdleMs);
-    }
-
-    function enqueueProfileStatusResolution(profileSlug) {
-        if (!profileSlug || profileFetchSchedulerState.jobsBySlug.has(profileSlug)) {
-            return;
-        }
-
-        profileFetchSchedulerState.jobsBySlug.set(profileSlug, {
-            slug: profileSlug,
-            status: "queued",
-            enqueuedAt: Date.now()
-        });
-        profileFetchSchedulerState.queue.push(profileSlug);
-        scheduleProfileFetchRuntimeStatsPublish();
-        scheduleProfileFetchQueueDrain();
-    }
-
-    function scheduleProfileFetchRuntimeStatsPublish(delayMs = 0) {
-        void delayMs;
-    }
-
-    async function publishProfileFetchRuntimeStats() {
-        try {
-            await writeProfileFetchRuntimeStats(getProfileFetchRuntimeSnapshot());
-        } catch (error) {
-            if (isExtensionContextInvalidatedError(error)) {
-                return;
-            }
-
-            console.warn("[LiLi] Failed to publish runtime queue stats", error);
-        }
-    }
-
-    function isExtensionContextInvalidatedError(error) {
-        return /Extension context invalidated/i.test(String(error?.message || error || ""));
-    }
-
-    function getProfileFetchRuntimeSnapshot() {
-        const now = Date.now();
-        const queuedCount = getQueuedProfileFetchCount();
-        const gapWaitMs = getNextProfileFetchWorkerWaitMs(now);
-        const cooldownWaitMs = Math.max(0, (profileFetchSchedulerState.syncedState.cooldownUntil || 0) - now);
-        const idleWaitMs = Math.max(0, profileFetchSettingsState.values.scrollIdleMs - (now - profileFetchSchedulerState.lastScrollAt));
-        const budgetWaitMs = getProfileFetchBudgetWaitMs(now);
-        const budgetBlockedUntil = budgetWaitMs > 0
-            ? (profileFetchSchedulerState.syncedState.recentFetchStarts[0] + profileFetchSettingsState.values.rollingWindowMs)
-            : 0;
-        const nextAllowedStartAt = gapWaitMs > 0 ? now + gapWaitMs : 0;
-        const activeWorkerCount = getActiveProfileFetchWorkerCount();
-
-        return {
-            tabId: profileFetchSchedulerState.tabId,
-            pageMode: pageLifecycleState.currentMode,
-            pathName: window.location.pathname || "",
-            queuedCount,
-            activeCount: profileFetchSchedulerState.activeRequestCount,
-            successfulCheckCount: profileFetchSchedulerState.successfulCheckCount,
-            lastSuccessfulCheckAt: profileFetchSchedulerState.lastSuccessfulCheckAt || 0,
-            totalFailedCheckCount: profileFetchSchedulerState.totalFailedCheckCount,
-            lastFailureCode: profileFetchSchedulerState.lastFailureCode,
-            lastFailureAt: profileFetchSchedulerState.lastFailureAt || 0,
-            failureCounts: { ...profileFetchSchedulerState.failureCounts },
-            schedulerActiveCount: activeWorkerCount,
-            workerCount: profileFetchSettingsState.values.workerCount,
-            concurrency: profileFetchSettingsState.values.workerCount,
-            draining: profileFetchSchedulerState.draining,
-            failureCount: profileFetchSchedulerState.failureCount,
-            leaseCount: Object.keys(profileFetchSchedulerState.syncedState.leases || {}).length,
-            recentFetchStartsCount: (profileFetchSchedulerState.syncedState.recentFetchStarts || []).length,
-            rollingBudgetMax: profileFetchSettingsState.values.rollingBudgetMax,
-            rollingWindowMs: profileFetchSettingsState.values.rollingWindowMs,
-            backoffCapMs: profileFetchSettingsState.values.backoffCapMs,
-            baseGapMs: profileFetchSettingsState.values.baseGapMs,
-            jitterMinMs: profileFetchSettingsState.values.jitterMinMs,
-            jitterMaxMs: profileFetchSettingsState.values.jitterMaxMs,
-            scrollIdleMs: profileFetchSettingsState.values.scrollIdleMs,
-            nextAllowedStartAt,
-            cooldownUntil: profileFetchSchedulerState.syncedState.cooldownUntil || 0,
-            lastScrollAt: profileFetchSchedulerState.lastScrollAt,
-            idleUntil: profileFetchSchedulerState.lastScrollAt + profileFetchSettingsState.values.scrollIdleMs,
-            budgetBlockedUntil,
-            scheduledDrainAt: profileFetchSchedulerState.scheduledDrainAt || 0,
-            gapWaitMs,
-            cooldownWaitMs,
-            idleWaitMs,
-            budgetWaitMs,
-            totalWaitMs: Math.max(gapWaitMs, cooldownWaitMs, idleWaitMs, budgetWaitMs),
-            oldestQueuedAt: getOldestQueuedAt(),
-            workers: profileFetchSchedulerState.workers.map((worker) => ({
-                id: worker.id,
-                status: worker.status,
-                activeProfileSlug: worker.activeProfileSlug,
-                nextAllowedStartAt: worker.nextAllowedStartAt
-            })),
-            updatedAt: now
-        };
-    }
-
-    function getActiveProfileFetchWorkerCount() {
-        let activeWorkerCount = 0;
-
-        for (const worker of profileFetchSchedulerState.workers) {
-            if (worker?.status === "active") {
-                activeWorkerCount += 1;
-            }
-        }
-
-        return activeWorkerCount;
-    }
-
-    function getQueuedProfileFetchCount() {
-        let queuedCount = 0;
-        for (const job of profileFetchSchedulerState.jobsBySlug.values()) {
-            if (job?.status === "queued") {
-                queuedCount += 1;
-            }
-        }
-
-        return queuedCount;
-    }
-
-    function getOldestQueuedAt() {
-        let oldestQueuedAt = 0;
-
-        for (const job of profileFetchSchedulerState.jobsBySlug.values()) {
-            if (job?.status !== "queued" || !Number.isFinite(job.enqueuedAt)) {
-                continue;
-            }
-
-            oldestQueuedAt = oldestQueuedAt === 0
-                ? job.enqueuedAt
-                : Math.min(oldestQueuedAt, job.enqueuedAt);
-        }
-
-        return oldestQueuedAt;
-    }
-
-    function beginTrackedRuntimeRequest() {
-        profileFetchSchedulerState.activeRequestCount += 1;
-    }
-
-    function endTrackedRuntimeRequest() {
-        profileFetchSchedulerState.activeRequestCount = Math.max(0, profileFetchSchedulerState.activeRequestCount - 1);
-    }
-
-    function handleProfileFetchPageHide() {
-        window.clearTimeout(profileFetchSchedulerState.runtimeStatsTimerId);
-        profileFetchSchedulerState.runtimeStatsTimerId = 0;
-        void clearProfileFetchRuntimeStats();
-    }
-
-    function scheduleProfileFetchQueueDrain(delayMs = 0) {
-        const normalizedDelayMs = Math.max(0, Math.floor(delayMs));
-        const scheduledDrainAt = Date.now() + normalizedDelayMs;
-
-        if (profileFetchSchedulerState.timerId && profileFetchSchedulerState.scheduledDrainAt <= scheduledDrainAt) {
-            return;
-        }
-
-        window.clearTimeout(profileFetchSchedulerState.timerId);
-        profileFetchSchedulerState.scheduledDrainAt = scheduledDrainAt;
-        profileFetchSchedulerState.timerId = window.setTimeout(() => {
-            profileFetchSchedulerState.timerId = 0;
-            profileFetchSchedulerState.scheduledDrainAt = 0;
-            void drainProfileFetchQueue();
-        }, normalizedDelayMs);
-    }
-
     async function syncSentInvitationsCache(targetDocuments = getActivePageDocuments("sent-invitations")) {
         const profileSlugs = collectSentInvitationProfileSlugs(targetDocuments);
         if (profileSlugs.size === 0) {
@@ -885,7 +576,6 @@
         }
 
         registerCard(profileSlug, card);
-        primeProfileStatus(profileSlug, connectionDegree);
         renderCardAction(card);
         card.dataset.liliPriorityProcessed = "1";
     }
@@ -1050,28 +740,24 @@
             "aria-label",
             actionKind === "pending"
                 ? (name ? `Pending invitation for ${name}` : "Pending invitation")
-                : actionKind === "loading"
-                    ? (name ? `Checking invitation status for ${name}` : "Checking invitation status")
-                    : actionKind === "sending"
-                        ? (name ? `Sending invitation to ${name}` : "Sending invitation")
-                        : (name ? `Invite ${name} to connect` : "Invite to connect")
+                : actionKind === "sending"
+                    ? (name ? `Sending invitation to ${name}` : "Sending invitation")
+                    : (name ? `Invite ${name} to connect` : "Invite to connect")
         );
         replacement.dataset.liliPriorityAction = actionKind;
         replacement.dataset.liliPrioritySource = actionSource;
         replacement.title = actionKind === "pending"
             ? getPendingTitle(actionSource)
-            : actionKind === "loading"
-                ? "Checking LinkedIn profile status"
-                : actionKind === "sending"
-                    ? "Sending invitation without a note"
-                    : "Send invitation without a note";
+            : actionKind === "sending"
+                ? "Sending invitation without a note"
+                : "Send invitation without a note";
 
-        if (actionKind === "pending" || actionKind === "sending" || actionKind === "loading") {
+        if (actionKind === "pending" || actionKind === "sending") {
             replacement.disabled = true;
             replacement.setAttribute("aria-disabled", "true");
         }
 
-        if (actionKind === "sending" || actionKind === "loading") {
+        if (actionKind === "sending") {
             replacement.setAttribute("aria-busy", "true");
         }
 
@@ -1079,11 +765,9 @@
         text.className = "artdeco-button__text";
         text.textContent = actionKind === "pending"
             ? "Pending"
-            : actionKind === "loading"
-                ? "Loading..."
-                : actionKind === "sending"
-                    ? "Sending..."
-                    : "Connect";
+            : actionKind === "sending"
+                ? "Sending..."
+                : "Connect";
         replacement.appendChild(text);
 
         if (actionKind === "connect") {
@@ -1127,18 +811,15 @@
         classes.delete("artdeco-button--primary");
         classes.delete("lili-connect-action");
         classes.delete("lili-sending-action");
-        classes.delete("lili-loading-action");
         classes.delete("lili-pending-action");
         classes.add("artdeco-button");
         classes.add("artdeco-button--2");
         classes.add(actionKind === "pending" ? "artdeco-button--secondary" : "artdeco-button--primary");
         classes.add(actionKind === "pending"
             ? "lili-pending-action"
-            : actionKind === "loading"
-                ? "lili-loading-action"
-                : actionKind === "sending"
-                    ? "lili-sending-action"
-                    : "lili-connect-action");
+            : actionKind === "sending"
+                ? "lili-sending-action"
+                : "lili-connect-action");
         return Array.from(classes).join(" ");
     }
 
@@ -1162,302 +843,6 @@
         }
 
         rerenderCards(profileSlug);
-    }
-
-    async function drainProfileFetchQueue() {
-        await profileFetchSettingsReady;
-        await profileFetchSchedulerReady;
-
-        if (pageLifecycleState.currentMode !== "group-members" || profileFetchSchedulerState.draining) {
-            return;
-        }
-
-        profileFetchSchedulerState.draining = true;
-
-        try {
-            while (true) {
-                const nextQueuedJob = getNextQueuedProfileJob();
-                if (!nextQueuedJob) {
-                    return;
-                }
-
-                const { profileSlug, queueIndex } = nextQueuedJob;
-
-                if (shouldSkipQueuedProfileFetch(profileSlug)) {
-                    profileFetchSchedulerState.queue.splice(queueIndex, 1);
-                    profileFetchSchedulerState.jobsBySlug.delete(profileSlug);
-                    profileProbeStateBySlug.delete(profileSlug);
-                    rerenderCards(profileSlug);
-                    scheduleProfileFetchRuntimeStatsPublish();
-                    continue;
-                }
-
-                const sharedWaitMs = getNextProfileFetchSharedWaitMs();
-                if (sharedWaitMs > 0) {
-                    scheduleProfileFetchQueueDrain(sharedWaitMs);
-                    return;
-                }
-
-                const worker = getNextReadyProfileFetchWorker();
-                if (!worker) {
-                    const workerWaitMs = getNextProfileFetchWorkerWaitMs();
-                    if (workerWaitMs > 0) {
-                        scheduleProfileFetchQueueDrain(workerWaitMs);
-                    }
-                    return;
-                }
-
-                const job = profileFetchSchedulerState.jobsBySlug.get(profileSlug);
-                if (!job) {
-                    continue;
-                }
-
-                profileFetchSchedulerState.queue.splice(queueIndex, 1);
-                job.status = "active";
-                job.workerId = worker.id;
-                worker.status = "active";
-                worker.activeProfileSlug = profileSlug;
-                scheduleProfileFetchRuntimeStatsPublish();
-                void runProfileFetchJob(worker.id, profileSlug);
-            }
-        } finally {
-            profileFetchSchedulerState.draining = false;
-        }
-    }
-
-    function getNextQueuedProfileJob() {
-        const queuedCandidates = [];
-
-        for (let index = profileFetchSchedulerState.queue.length - 1; index >= 0; index -= 1) {
-            const profileSlug = profileFetchSchedulerState.queue[index];
-            const job = profileFetchSchedulerState.jobsBySlug.get(profileSlug);
-            if (!job || job.status !== "queued") {
-                profileFetchSchedulerState.queue.splice(index, 1);
-                continue;
-            }
-
-            queuedCandidates.push({
-                profileSlug,
-                queueIndex: index
-            });
-        }
-
-        if (queuedCandidates.length === 0) {
-            return null;
-        }
-
-        return queuedCandidates[Math.floor(Math.random() * queuedCandidates.length)];
-    }
-
-    function shouldSkipQueuedProfileFetch(profileSlug) {
-        return Boolean(relationshipHints.get(profileSlug)?.action === "pending"
-            || getCachedProfileStatus(profileSlug)
-            || inviteStateBySlug.get(profileSlug)?.action === "sending");
-    }
-
-    function getNextProfileFetchSharedWaitMs() {
-        const now = Date.now();
-        const cooldownWaitMs = Math.max(0, (profileFetchSchedulerState.syncedState.cooldownUntil || 0) - now);
-        const idleWaitMs = Math.max(0, profileFetchSettingsState.values.scrollIdleMs - (now - profileFetchSchedulerState.lastScrollAt));
-        const budgetWaitMs = getProfileFetchBudgetWaitMs(now);
-
-        return Math.max(cooldownWaitMs, idleWaitMs, budgetWaitMs);
-    }
-
-    function getNextReadyProfileFetchWorker(now = Date.now()) {
-        for (let index = 0; index < profileFetchSettingsState.values.workerCount; index += 1) {
-            const worker = profileFetchSchedulerState.workers[index];
-            if (!worker || worker.status !== "idle") {
-                continue;
-            }
-
-            if (Math.max(0, worker.nextAllowedStartAt - now) > 0) {
-                continue;
-            }
-
-            return worker;
-        }
-
-        return null;
-    }
-
-    function getNextProfileFetchWorkerWaitMs(now = Date.now()) {
-        let minWaitMs = 0;
-
-        for (let index = 0; index < profileFetchSettingsState.values.workerCount; index += 1) {
-            const worker = profileFetchSchedulerState.workers[index];
-            if (!worker || worker.status !== "idle") {
-                continue;
-            }
-
-            const waitMs = Math.max(0, worker.nextAllowedStartAt - now);
-            if (waitMs <= 0) {
-                return 0;
-            }
-
-            minWaitMs = minWaitMs === 0 ? waitMs : Math.min(minWaitMs, waitMs);
-        }
-
-        return minWaitMs;
-    }
-
-    function getProfileFetchBudgetWaitMs(now) {
-        const recentFetchStarts = profileFetchSchedulerState.syncedState.recentFetchStarts || [];
-        if (recentFetchStarts.length < profileFetchSettingsState.values.rollingBudgetMax) {
-            return 0;
-        }
-
-        const earliestAllowedAt = recentFetchStarts[0] + profileFetchSettingsState.values.rollingWindowMs;
-        return Math.max(0, earliestAllowedAt - now);
-    }
-
-    async function runProfileFetchJob(workerId, profileSlug) {
-        let preserveJob = false;
-        let retryDelayMs = 0;
-        let leaseAcquired = false;
-        const worker = getProfileFetchWorkerById(workerId);
-
-        try {
-            const leaseResult = await tryAcquireProfileFetchLease(profileSlug);
-            if (!leaseResult.acquired) {
-                preserveJob = true;
-                retryDelayMs = leaseResult.retryAfterMs;
-                requeueProfileFetchJob(profileSlug);
-                return;
-            }
-
-            leaseAcquired = true;
-            const startedAt = Date.now();
-            if (worker) {
-                worker.nextAllowedStartAt = startedAt
-                    + profileFetchSettingsState.values.baseGapMs
-                    + getRandomProfileFetchJitterMs();
-            }
-            await registerProfileFetchStart(startedAt);
-            await resolveProfileStatus(profileSlug);
-            profileFetchSchedulerState.failureCount = 0;
-        } catch (error) {
-            console.debug("[LiLi] Scheduled profile fetch failed", profileSlug, error);
-            profileProbeStateBySlug.set(profileSlug, { status: "failed" });
-            rerenderCards(profileSlug);
-            noteProfileFetchFailure(error);
-            await applyProfileFetchFailurePenalty(error);
-        } finally {
-            if (leaseAcquired) {
-                await releaseProfileFetchLease(profileSlug);
-            }
-
-            finalizeProfileFetchJob(workerId, profileSlug, preserveJob);
-            scheduleProfileFetchQueueDrain(retryDelayMs);
-        }
-    }
-
-    function getProfileFetchWorkerById(workerId) {
-        return profileFetchSchedulerState.workers.find((worker) => worker.id === workerId) || null;
-    }
-
-    function requeueProfileFetchJob(profileSlug) {
-        const job = profileFetchSchedulerState.jobsBySlug.get(profileSlug);
-        if (!job) {
-            return;
-        }
-
-        job.status = "queued";
-        if (!profileFetchSchedulerState.queue.includes(profileSlug)) {
-            profileFetchSchedulerState.queue.unshift(profileSlug);
-        }
-
-        scheduleProfileFetchRuntimeStatsPublish();
-    }
-
-    function finalizeProfileFetchJob(workerId, profileSlug, preserveJob) {
-        const worker = getProfileFetchWorkerById(workerId);
-        if (worker) {
-            worker.status = "idle";
-            worker.activeProfileSlug = "";
-        }
-
-        if (!preserveJob) {
-            profileFetchSchedulerState.jobsBySlug.delete(profileSlug);
-        } else {
-            const job = profileFetchSchedulerState.jobsBySlug.get(profileSlug);
-            if (job) {
-                delete job.workerId;
-            }
-        }
-
-        trimIdleProfileFetchWorkers();
-        scheduleProfileFetchRuntimeStatsPublish();
-    }
-
-    function noteProfileFetchFailure(error) {
-        const failureCode = normalizeProfileFetchFailureCode(error?.liliCode);
-        profileFetchSchedulerState.totalFailedCheckCount += 1;
-        profileFetchSchedulerState.lastFailureCode = failureCode;
-        profileFetchSchedulerState.lastFailureAt = Date.now();
-        profileFetchSchedulerState.failureCounts[failureCode] = (profileFetchSchedulerState.failureCounts[failureCode] || 0) + 1;
-        scheduleProfileFetchRuntimeStatsPublish();
-    }
-
-    function normalizeProfileFetchFailureCode(code) {
-        switch (code) {
-            case "challenge":
-            case "rate-limit":
-            case "timeout":
-            case "forbidden":
-            case "server":
-            case "parse":
-                return code;
-            default:
-                return "other";
-        }
-    }
-
-    async function registerProfileFetchStart(startedAt) {
-        await mutateProfileFetchSchedulerState((state) => {
-            state.recentFetchStarts.push(startedAt);
-            return state;
-        });
-    }
-
-    async function applyProfileFetchFailurePenalty(error) {
-        const penaltyMs = getProfileFetchFailurePenaltyMs(error);
-        if (penaltyMs <= 0) {
-            return;
-        }
-
-        profileFetchSchedulerState.failureCount = Math.min(profileFetchSchedulerState.failureCount + 1, 8);
-        const cooldownMs = Math.min(
-            profileFetchSettingsState.values.backoffCapMs,
-            penaltyMs * (2 ** (profileFetchSchedulerState.failureCount - 1))
-        );
-        const cooldownUntil = Date.now() + cooldownMs;
-
-        await mutateProfileFetchSchedulerState((state) => {
-            state.cooldownUntil = Math.max(state.cooldownUntil || 0, cooldownUntil);
-            return state;
-        });
-    }
-
-    function getProfileFetchFailurePenaltyMs(error) {
-        switch (error?.liliCode) {
-            case "rate-limit":
-            case "challenge":
-                return PROFILE_FETCH_BACKOFF_INITIAL_MS;
-            case "forbidden":
-                return 15000;
-            case "timeout":
-            case "parse":
-            case "server":
-                return 10000;
-            default:
-                return 0;
-        }
-    }
-
-    function primeProfileStatus(profileSlug, connectionDegree) {
-        void profileSlug;
-        void connectionDegree;
     }
 
     async function sendInviteWithoutNote(profileSlug) {
@@ -1522,76 +907,47 @@
     }
 
     async function sendInviteThroughApi(profileUrn) {
-        beginTrackedRuntimeRequest();
+        const csrfToken = getLinkedInCsrfToken();
+        if (!csrfToken) {
+            throw new Error("LinkedIn CSRF token is not available");
+        }
 
-        try {
-            const csrfToken = getLinkedInCsrfToken();
-            if (!csrfToken) {
-                throw new Error("LinkedIn CSRF token is not available");
-            }
-
-            const response = await fetch(normalizeLinkedInUrl(INVITE_API_PATH), {
-                method: "POST",
-                credentials: "same-origin",
-                headers: {
-                    accept: "application/vnd.linkedin.normalized+json+2.1",
-                    "content-type": "application/json; charset=UTF-8",
-                    "csrf-token": csrfToken,
-                    "x-li-lang": getLinkedInLanguageHeader(),
-                    "x-restli-protocol-version": "2.0.0"
-                },
-                body: JSON.stringify({
-                    invitee: {
-                        inviteeUnion: {
-                            memberProfile: profileUrn
-                        }
+        const response = await fetch(normalizeLinkedInUrl(INVITE_API_PATH), {
+            method: "POST",
+            credentials: "same-origin",
+            headers: {
+                accept: "application/vnd.linkedin.normalized+json+2.1",
+                "content-type": "application/json; charset=UTF-8",
+                "csrf-token": csrfToken,
+                "x-li-lang": getLinkedInLanguageHeader(),
+                "x-restli-protocol-version": "2.0.0"
+            },
+            body: JSON.stringify({
+                invitee: {
+                    inviteeUnion: {
+                        memberProfile: profileUrn
                     }
-                })
-            });
+                }
+            })
+        });
 
-            const text = await response.text();
-            if (looksLikeInvitePending(text, "POST", response.status)) {
-                return "pending";
-            }
+        const text = await response.text();
+        if (looksLikeInvitePending(text, "POST", response.status)) {
+            return "pending";
+        }
 
-            if (response.ok) {
-                return "sent";
-            }
+        if (response.ok) {
+            return "sent";
+        }
 
-            if (looksLikeInviteFailure(text, "POST", response.status)) {
-                return "failure";
-            }
-
+        if (looksLikeInviteFailure(text, "POST", response.status)) {
             return "failure";
-        } finally {
-            endTrackedRuntimeRequest();
-        }
-    }
-
-    async function resolveProfileStatus(profileSlug) {
-        await profileStatusCacheReady;
-
-        if (relationshipHints.get(profileSlug)?.action === "pending" || getCachedProfileStatus(profileSlug)) {
-            profileProbeStateBySlug.delete(profileSlug);
-            rerenderCards(profileSlug);
-            return;
         }
 
-        const profileRecord = await fetchProfileRecord(profileSlug);
-        profileProbeStateBySlug.delete(profileSlug);
-
-        if (profileRecord.action === "pending") {
-            setPendingStatus(profileSlug, "profile-fetch", profileRecord.profileUrn);
-            return;
-        }
-
-        await setCachedProfileStatus(profileSlug, "connect", "profile-fetch", profileRecord.profileUrn);
-        rerenderCards(profileSlug);
+        return "failure";
     }
 
     async function fetchProfileRecord(profileSlug) {
-        beginTrackedRuntimeRequest();
-
         const controller = new AbortController();
         const timeoutId = window.setTimeout(() => {
             controller.abort();
@@ -1633,10 +989,6 @@
                 throw createProfileFetchError("parse", "Profile fetch returned an unexpected LinkedIn document");
             }
 
-            profileFetchSchedulerState.successfulCheckCount += 1;
-            profileFetchSchedulerState.lastSuccessfulCheckAt = Date.now();
-            scheduleProfileFetchRuntimeStatsPublish();
-
             return profileRecord;
         } catch (error) {
             if (error?.name === "AbortError") {
@@ -1646,7 +998,6 @@
             throw error;
         } finally {
             window.clearTimeout(timeoutId);
-            endTrackedRuntimeRequest();
         }
     }
 
@@ -1783,20 +1134,6 @@
         return error;
     }
 
-    function getRandomProfileFetchJitterMs() {
-        const { jitterMinMs, jitterMaxMs } = profileFetchSettingsState.values;
-        return Math.floor(Math.random() * (jitterMaxMs - jitterMinMs + 1))
-            + jitterMinMs;
-    }
-    function normalizeProfileFetchSettings(value) {
-        if (profileFetchSettingsApi?.normalizeProfileFetchSettings) {
-            return profileFetchSettingsApi.normalizeProfileFetchSettings(value);
-        }
-
-        return DEFAULT_PROFILE_FETCH_SETTINGS;
-    }
-
-
     function getCachedProfileStatus(profileSlug) {
         const record = profileStatusBySlug.get(profileSlug);
         if (!record) {
@@ -1837,7 +1174,6 @@
             source
         });
         inviteStateBySlug.delete(profileSlug);
-        profileProbeStateBySlug.delete(profileSlug);
         profileStatusBySlug.set(profileSlug, {
             action: "pending",
             source: cachedSource,
@@ -1856,7 +1192,6 @@
 
         relationshipHints.delete(profileSlug);
         inviteStateBySlug.delete(profileSlug);
-        profileProbeStateBySlug.delete(profileSlug);
         profileStatusBySlug.delete(profileSlug);
 
         void source;
@@ -1949,180 +1284,6 @@
         });
     }
 
-    async function loadProfileFetchSchedulerState() {
-        try {
-            await profileFetchSettingsReady;
-            const { state, didPrune } = normalizeProfileFetchSchedulerStorageState(await readProfileFetchSchedulerState());
-            replaceLocalProfileFetchSchedulerState(state);
-
-            if (didPrune) {
-                await writeProfileFetchSchedulerState(state);
-            }
-        } catch (error) {
-            console.warn("[LiLi] Failed to load profile fetch scheduler state", error);
-        }
-    }
-
-    async function loadProfileFetchSettings() {
-        try {
-            replaceLocalProfileFetchSettings(await readProfileFetchSettings());
-        } catch (error) {
-            console.warn("[LiLi] Failed to load profile fetch settings", error);
-        }
-    }
-
-    function replaceLocalProfileFetchSettings(nextSettings) {
-        profileFetchSettingsState.values = normalizeProfileFetchSettings(nextSettings);
-        reconcileProfileFetchWorkers();
-    }
-
-    function installProfileFetchSettingsObserver() {
-        if (!chrome.storage?.onChanged) {
-            return;
-        }
-
-        chrome.storage.onChanged.addListener((changes, areaName) => {
-            if (areaName !== "local") {
-                return;
-            }
-
-            const change = changes[PROFILE_FETCH_SETTINGS_KEY];
-            if (!change) {
-                return;
-            }
-
-            replaceLocalProfileFetchSettings(change.newValue || DEFAULT_PROFILE_FETCH_SETTINGS);
-            scheduleProfileFetchQueueDrain();
-        });
-    }
-
-    function installProfileFetchSchedulerObserver() {
-        if (!chrome.storage?.onChanged) {
-            return;
-        }
-
-        chrome.storage.onChanged.addListener((changes, areaName) => {
-            if (areaName !== "local") {
-                return;
-            }
-
-            const change = changes[PROFILE_FETCH_SCHEDULER_KEY];
-            if (!change) {
-                return;
-            }
-
-            const { state } = normalizeProfileFetchSchedulerStorageState(change.newValue || {});
-            replaceLocalProfileFetchSchedulerState(state);
-            scheduleProfileFetchQueueDrain();
-        });
-    }
-
-    function normalizeProfileFetchSchedulerStorageState(storedState) {
-        const now = Date.now();
-        const nextState = createEmptyProfileFetchSchedulerStorageState();
-        let didPrune = false;
-
-        if (storedState && typeof storedState === "object") {
-            if (Number.isFinite(storedState.cooldownUntil) && storedState.cooldownUntil > now) {
-                nextState.cooldownUntil = storedState.cooldownUntil;
-            } else if (storedState.cooldownUntil) {
-                didPrune = true;
-            }
-
-            if (Array.isArray(storedState.recentFetchStarts)) {
-                nextState.recentFetchStarts = storedState.recentFetchStarts
-                    .filter((timestamp) => Number.isFinite(timestamp) && timestamp > now - profileFetchSettingsState.values.rollingWindowMs)
-                    .sort((left, right) => left - right);
-                didPrune = didPrune || nextState.recentFetchStarts.length !== storedState.recentFetchStarts.length;
-            }
-
-            if (storedState.leases && typeof storedState.leases === "object") {
-                for (const [profileSlug, lease] of Object.entries(storedState.leases)) {
-                    if (!lease || typeof lease.owner !== "string" || !Number.isFinite(lease.expiresAt) || lease.expiresAt <= now) {
-                        didPrune = true;
-                        continue;
-                    }
-
-                    nextState.leases[profileSlug] = {
-                        owner: lease.owner,
-                        expiresAt: lease.expiresAt
-                    };
-                }
-            }
-        }
-
-        return {
-            state: nextState,
-            didPrune
-        };
-    }
-
-    function replaceLocalProfileFetchSchedulerState(nextState) {
-        profileFetchSchedulerState.syncedState = nextState;
-    }
-
-    function mutateProfileFetchSchedulerState(mutation) {
-        const runMutation = async () => {
-            const { state: currentState } = normalizeProfileFetchSchedulerStorageState(await readProfileFetchSchedulerState());
-            const mutatedState = mutation(structuredClone(currentState)) || currentState;
-            const { state: nextState } = normalizeProfileFetchSchedulerStorageState(mutatedState);
-            await writeProfileFetchSchedulerState(nextState);
-            replaceLocalProfileFetchSchedulerState(nextState);
-            return nextState;
-        };
-
-        const mutationPromise = profileFetchSchedulerState.storageMutationPromise.then(runMutation, runMutation);
-        profileFetchSchedulerState.storageMutationPromise = mutationPromise.then(() => undefined, () => undefined);
-        return mutationPromise;
-    }
-
-    async function tryAcquireProfileFetchLease(profileSlug) {
-        const now = Date.now();
-        const nextLease = {
-            owner: profileFetchSchedulerState.tabId,
-            expiresAt: now + PROFILE_FETCH_LEASE_TTL_MS
-        };
-
-        await mutateProfileFetchSchedulerState((state) => {
-            const existingLease = state.leases[profileSlug];
-            if (existingLease && existingLease.owner !== profileFetchSchedulerState.tabId && existingLease.expiresAt > now) {
-                return state;
-            }
-
-            state.leases[profileSlug] = nextLease;
-            return state;
-        });
-
-        const { state: verifiedState } = normalizeProfileFetchSchedulerStorageState(await readProfileFetchSchedulerState());
-        replaceLocalProfileFetchSchedulerState(verifiedState);
-
-        const verifiedLease = verifiedState.leases[profileSlug];
-        if (verifiedLease?.owner === profileFetchSchedulerState.tabId && verifiedLease.expiresAt > now) {
-            return {
-                acquired: true,
-                retryAfterMs: 0
-            };
-        }
-
-        return {
-            acquired: false,
-            retryAfterMs: Math.max(
-                PROFILE_FETCH_LEASE_RETRY_MIN_MS,
-                (verifiedLease?.expiresAt || now + PROFILE_FETCH_LEASE_RETRY_MIN_MS) - now
-            )
-        };
-    }
-
-    async function releaseProfileFetchLease(profileSlug) {
-        await mutateProfileFetchSchedulerState((state) => {
-            const existingLease = state.leases[profileSlug];
-            if (existingLease?.owner === profileFetchSchedulerState.tabId) {
-                delete state.leases[profileSlug];
-            }
-            return state;
-        });
-    }
-
     function isValidProfileStatusRecord(record, now) {
         return Boolean(record)
             && record.action === "pending"
@@ -2205,125 +1366,6 @@
         window.localStorage.setItem(PROFILE_STATUS_CACHE_KEY, JSON.stringify(payload));
     }
 
-    async function readProfileFetchSchedulerState() {
-        if (chrome.storage?.local) {
-            const result = await new Promise((resolve, reject) => {
-                chrome.storage.local.get([PROFILE_FETCH_SCHEDULER_KEY], (value) => {
-                    const error = chrome.runtime?.lastError;
-                    if (error) {
-                        reject(new Error(error.message));
-                        return;
-                    }
-
-                    resolve(value || {});
-                });
-            });
-
-            return result[PROFILE_FETCH_SCHEDULER_KEY] && typeof result[PROFILE_FETCH_SCHEDULER_KEY] === "object"
-                ? result[PROFILE_FETCH_SCHEDULER_KEY]
-                : {};
-        }
-
-        try {
-            const rawValue = window.localStorage.getItem(PROFILE_FETCH_SCHEDULER_KEY);
-            if (!rawValue) {
-                return {};
-            }
-
-            const parsedValue = JSON.parse(rawValue);
-            return parsedValue && typeof parsedValue === "object" ? parsedValue : {};
-        } catch {
-            return {};
-        }
-    }
-
-    async function writeProfileFetchSchedulerState(payload) {
-        if (chrome.storage?.local) {
-            await new Promise((resolve, reject) => {
-                chrome.storage.local.set({ [PROFILE_FETCH_SCHEDULER_KEY]: payload }, () => {
-                    const error = chrome.runtime?.lastError;
-                    if (error) {
-                        reject(new Error(error.message));
-                        return;
-                    }
-
-                    resolve();
-                });
-            });
-            return;
-        }
-
-        window.localStorage.setItem(PROFILE_FETCH_SCHEDULER_KEY, JSON.stringify(payload));
-    }
-
-    async function writeProfileFetchRuntimeStats(payload) {
-        const storageKey = `${PROFILE_FETCH_RUNTIME_KEY_PREFIX}${profileFetchSchedulerState.tabId}`;
-        if (chrome.storage?.local) {
-            await new Promise((resolve, reject) => {
-                chrome.storage.local.set({ [storageKey]: payload }, () => {
-                    const error = chrome.runtime?.lastError;
-                    if (error) {
-                        reject(new Error(error.message));
-                        return;
-                    }
-
-                    resolve();
-                });
-            });
-            return;
-        }
-
-        window.localStorage.setItem(storageKey, JSON.stringify(payload));
-    }
-
-    async function clearProfileFetchRuntimeStats() {
-        const storageKey = `${PROFILE_FETCH_RUNTIME_KEY_PREFIX}${profileFetchSchedulerState.tabId}`;
-        if (chrome.storage?.local) {
-            await new Promise((resolve, reject) => {
-                chrome.storage.local.remove(storageKey, () => {
-                    const error = chrome.runtime?.lastError;
-                    if (error) {
-                        reject(new Error(error.message));
-                        return;
-                    }
-
-                    resolve();
-                });
-            });
-            return;
-        }
-
-        window.localStorage.removeItem(storageKey);
-    }
-
-    async function readProfileFetchSettings() {
-        if (chrome.storage?.local) {
-            const result = await new Promise((resolve, reject) => {
-                chrome.storage.local.get([PROFILE_FETCH_SETTINGS_KEY], (value) => {
-                    const error = chrome.runtime?.lastError;
-                    if (error) {
-                        reject(new Error(error.message));
-                        return;
-                    }
-
-                    resolve(value || {});
-                });
-            });
-
-            return normalizeProfileFetchSettings(result[PROFILE_FETCH_SETTINGS_KEY]);
-        }
-
-        try {
-            const rawValue = window.localStorage.getItem(PROFILE_FETCH_SETTINGS_KEY);
-            if (!rawValue) {
-                return DEFAULT_PROFILE_FETCH_SETTINGS;
-            }
-
-            return normalizeProfileFetchSettings(JSON.parse(rawValue));
-        } catch {
-            return DEFAULT_PROFILE_FETCH_SETTINGS;
-        }
-    }
 
     function getLinkedInCsrfToken() {
         const cookieValue = document.cookie

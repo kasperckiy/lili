@@ -107,24 +107,6 @@ body {
     line-height: 1.35;
 }
 
-.runtime-debug-grid {
-    display: grid;
-    gap: 10px;
-    margin-top: 12px;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.runtime-debug-card {
-    padding: 12px;
-    border: 1px solid rgba(10, 102, 194, 0.14);
-    border-radius: 12px;
-    background: rgba(255, 255, 255, 0.65);
-}
-
-.runtime-debug-card--full {
-    grid-column: 1 / -1;
-}
-
 .runtime-debug-title {
     margin: 0 0 10px;
     color: var(--ink);
@@ -137,14 +119,6 @@ body {
 .runtime-debug-list {
     display: grid;
     gap: 8px;
-}
-
-.runtime-debug-list--three {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.runtime-debug-list--two {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .runtime-debug-row {
@@ -193,69 +167,6 @@ h1 {
     border-radius: 16px;
     background: color-mix(in srgb, var(--panel) 92%, white 8%);
     box-shadow: 0 10px 30px rgba(31, 42, 50, 0.08);
-}
-
-.field-group {
-    display: grid;
-    gap: 12px;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.field {
-    display: grid;
-    gap: 6px;
-}
-
-.field span {
-    color: var(--muted);
-    font-weight: 600;
-}
-
-.field-help {
-    color: var(--muted);
-    font-size: 11px;
-    line-height: 1.35;
-}
-
-.field input {
-    width: 100%;
-    box-sizing: border-box;
-    padding: 10px 12px;
-    border: 1px solid var(--line);
-    border-radius: 10px;
-    background: #fff;
-    color: var(--ink);
-    font: inherit;
-}
-
-.field input:focus {
-    outline: 2px solid rgba(10, 102, 194, 0.2);
-    border-color: var(--accent);
-}
-
-.actions {
-    display: flex;
-    gap: 10px;
-    margin-top: 4px;
-}
-
-.actions button {
-    flex: 1;
-    padding: 10px 12px;
-    border-radius: 999px;
-    border: 1px solid transparent;
-    cursor: pointer;
-    font: inherit;
-    font-weight: 700;
-}
-
-.primary-action {
-    background: var(--accent);
-    color: #fff;
-}
-
-.primary-action:hover {
-    background: var(--accent-strong);
 }
 
 .secondary-action {
